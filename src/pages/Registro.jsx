@@ -1,11 +1,15 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom' // Añadido por si quieres redirigir al registrarse
-import { userApi } from '../Data/ConexionUser' // Importamos tu conexión a la API
+import { useNavigate } from 'react-router-dom'
+import { GoogleLogin } from '@react-oauth/google'
+import { jwtDecode } from 'jwt-decode'
+import { userApi } from '../Data/ConexionUser'
 
 function Registro() {
     const navigate = useNavigate()
     const [formData, setFormData] = useState({
+        rut: '',
         nombre: '',
+        apellido: '',
         correo: '',
         confirmarCorreo: '',
         password: '',
@@ -14,6 +18,7 @@ function Registro() {
 
     const [errors, setErrors] = useState({})
     const [mensajeExito, setMensajeExito] = useState(false)
+    const [enviando, setEnviando] = useState(false)
 
     const handleChange = (e) => {
         setFormData({
@@ -22,14 +27,25 @@ function Registro() {
         })
     }
 
-    const handleSubmit = async (e) => {
-        e.preventDefault()
-        let nuevosErrores = {}
+    const validarFormularioManual = () => {
+        const nuevosErrores = {}
+
+        if (!formData.rut.trim()) {
+            nuevosErrores.rut = 'El RUT es requerido.'
+        } else if (!/^[0-9]{7,8}-[0-9kK]$/.test(formData.rut.trim())) {
+            nuevosErrores.rut = 'Ingresa un RUT válido sin puntos y con guión (ej: 12345678-9).'
+        }
 
         if (!formData.nombre.trim()) {
             nuevosErrores.nombre = 'El nombre es requerido.'
         } else if (formData.nombre.length > 100) {
             nuevosErrores.nombre = 'El nombre no puede superar los 100 caracteres.'
+        }
+
+        if (!formData.apellido.trim()) {
+            nuevosErrores.apellido = 'El apellido es requerido.'
+        } else if (formData.apellido.length > 100) {
+            nuevosErrores.apellido = 'El apellido no puede superar los 100 caracteres.'
         }
 
         if (!formData.correo.trim()) {
@@ -38,26 +54,25 @@ function Registro() {
             nuevosErrores.correo = 'El correo no puede superar los 100 caracteres.'
         } else {
             const dominiosValidos = ['@duoc.cl', '@profesor.duoc.cl', '@gmail.com']
-            const esValido = dominiosValidos.some(dominio => formData.correo.endsWith(dominio))
+            const esValido = dominiosValidos.some((dominio) =>
+                formData.correo.trim().toLowerCase().endsWith(dominio)
+            )
             if (!esValido) {
                 nuevosErrores.correo = 'Solo se permiten correos @duoc.cl, @profesor.duoc.cl y @gmail.com.'
             }
         }
 
-
         if (!formData.confirmarCorreo.trim()) {
             nuevosErrores.confirmarCorreo = 'Debe confirmar el correo electrónico.'
-        } else if (formData.correo !== formData.confirmarCorreo) {
+        } else if (formData.correo.trim() !== formData.confirmarCorreo.trim()) {
             nuevosErrores.confirmarCorreo = 'Los correos electrónicos no coinciden.'
         }
 
-
         if (!formData.password) {
             nuevosErrores.password = 'La contraseña es requerida.'
-        } else if (formData.password.length < 4 || formData.password.length > 10) {
-            nuevosErrores.password = 'La contraseña debe tener entre 4 y 10 caracteres.'
-        }   
-
+        } else if (formData.password.length < 4 || formData.password.length > 20) {
+            nuevosErrores.password = 'La contraseña debe tener entre 4 y 20 caracteres.'
+        }
 
         if (!formData.confirmarPassword) {
             nuevosErrores.confirmarPassword = 'Debe confirmar la contraseña.'
@@ -65,39 +80,88 @@ function Registro() {
             nuevosErrores.confirmarPassword = 'Las contraseñas no coinciden.'
         }
 
+        return nuevosErrores
+    }
+
+    const handleSubmit = async (e) => {
+        e.preventDefault()
+        const nuevosErrores = validarFormularioManual()
         setErrors(nuevosErrores)
 
         if (Object.keys(nuevosErrores).length === 0) {
             try {
-                // Adaptamos los nombres del formulario al DTO que espera tu backend (CreateUser)
+                setEnviando(true)
+                setErrors({})
+
                 const datosParaEnviar = {
-                    nombre: formData.nombre,
-                    email: formData.correo,         // El backend recibe 'email'
-                    paswword: formData.password,
-                    rol:'cliente'     // El backend recibe 'paswword' (con doble 'w')
+                    rut: formData.rut.trim(),
+                    nombre: formData.nombre.trim(),
+                    apellido: formData.apellido.trim(),
+                    correo: formData.correo.trim(),
+                    password: formData.password,
+                    rol: 'cliente'
                 }
 
-                // Llamamos a la API para crear el usuario real en la base de datos
                 const respuesta = await userApi.createUser(datosParaEnviar)
 
                 if (respuesta) {
                     setMensajeExito(true)
-                    console.log('Usuario registrado con éxito:', respuesta)
-
-                    // Opcional: Redirigir al login después de unos segundos
                     setTimeout(() => {
                         navigate('/login')
                     }, 1500)
                 }
             } catch (error) {
-
                 console.error('Error al registrar usuario:', error)
-                setErrors({ correo: 'Ocurrió un error al registrar el usuario, receurde que la contraseña debe tener minimo 10 carcteres.' })
+                setErrors({
+                    general: error.message || 'Ocurrió un error al registrar el usuario.'
+                })
                 setMensajeExito(false)
+            } finally {
+                setEnviando(false)
             }
         } else {
             setMensajeExito(false)
         }
+    }
+
+    const handleGoogleSuccess = async (credentialResponse) => {
+        try {
+            if (!credentialResponse?.credential) {
+                throw new Error('Google no devolvió un token válido.')
+            }
+
+            const decoded = jwtDecode(credentialResponse.credential)
+            if (!decoded?.email || !decoded?.sub) {
+                throw new Error('No se pudieron obtener el correo y el ID (sub) desde Google.')
+            }
+
+            setEnviando(true)
+            setErrors({})
+
+            // No pasa por validarFormularioManual() porque no hay RUT, confirmación ni límite de 20 chars en sub
+            const respuesta = await userApi.createUserWithGoogle(decoded)
+            if (respuesta) {
+                setMensajeExito(true)
+                setTimeout(() => {
+                    navigate('/login')
+                }, 1500)
+            }
+        } catch (error) {
+            console.error('Error en registro con Google:', error)
+            setErrors({
+                general: error.message || 'No se pudo completar el registro con Google.'
+            })
+            setMensajeExito(false)
+        } finally {
+            setEnviando(false)
+        }
+    }
+
+    const handleGoogleError = () => {
+        setErrors({
+            general: 'El registro con Google fue cancelado o falló.'
+        })
+        setMensajeExito(false)
     }
 
     return (
@@ -112,27 +176,63 @@ function Registro() {
                                 ¡Registro exitoso! Redirigiendo al login...
                             </div>
                         )}
+
+                        {errors.general && (
+                            <div className="alert alert-danger text-center" role="alert">
+                                {errors.general}
+                            </div>
+                        )}
+
                         <form onSubmit={handleSubmit} noValidate>
-                            
-                            {/* Campo Nombre */}
+
+                            {/* Campo RUT */}
                             <div className="mb-3">
-                                <label className="form-label fw-bold" style={{ color: '#5d4037' }}>Nombre</label>
-                                <input 
-                                    type="text" 
-                                    name="nombre"
-                                    value={formData.nombre}
+                                <label className="form-label fw-bold" style={{ color: '#5d4037' }}>RUT</label>
+                                <input
+                                    type="text"
+                                    name="rut"
+                                    value={formData.rut}
                                     onChange={handleChange}
-                                    className={`form-control border-secondary ${errors.nombre ? 'is-invalid' : ''}`}
-                                    placeholder="Ingresa tu nombre (máx 100 caracteres)"
+                                    className={`form-control border-secondary ${errors.rut ? 'is-invalid' : ''}`}
+                                    placeholder="Ej: 12345678-9"
                                 />
-                                {errors.nombre && <div className="invalid-feedback">{errors.nombre}</div>}
+                                {errors.rut && <div className="invalid-feedback">{errors.rut}</div>}
+                            </div>
+
+                            {/* Campo Nombre y Apellido */}
+                            <div className="row g-2 mb-3">
+                                <div className="col-12 col-md-6">
+                                    <label className="form-label fw-bold" style={{ color: '#5d4037' }}>Nombre</label>
+                                    <input
+                                        type="text"
+                                        name="nombre"
+                                        value={formData.nombre}
+                                        onChange={handleChange}
+                                        className={`form-control border-secondary ${errors.nombre ? 'is-invalid' : ''}`}
+                                        placeholder="Ingresa tu nombre"
+                                    />
+                                    {errors.nombre && <div className="invalid-feedback">{errors.nombre}</div>}
+                                </div>
+
+                                <div className="col-12 col-md-6">
+                                    <label className="form-label fw-bold" style={{ color: '#5d4037' }}>Apellido</label>
+                                    <input
+                                        type="text"
+                                        name="apellido"
+                                        value={formData.apellido}
+                                        onChange={handleChange}
+                                        className={`form-control border-secondary ${errors.apellido ? 'is-invalid' : ''}`}
+                                        placeholder="Ingresa tu apellido"
+                                    />
+                                    {errors.apellido && <div className="invalid-feedback">{errors.apellido}</div>}
+                                </div>
                             </div>
 
                             {/* Campo Correo */}
                             <div className="mb-3">
                                 <label className="form-label fw-bold" style={{ color: '#5d4037' }}>Correo Electrónico</label>
-                                <input 
-                                    type="email" 
+                                <input
+                                    type="email"
                                     name="correo"
                                     value={formData.correo}
                                     onChange={handleChange}
@@ -145,8 +245,8 @@ function Registro() {
                             {/* Campo Confirmar Correo */}
                             <div className="mb-3">
                                 <label className="form-label fw-bold" style={{ color: '#5d4037' }}>Confirmar Correo Electrónico</label>
-                                <input 
-                                    type="email" 
+                                <input
+                                    type="email"
                                     name="confirmarCorreo"
                                     value={formData.confirmarCorreo}
                                     onChange={handleChange}
@@ -158,9 +258,9 @@ function Registro() {
 
                             {/* Campo Contraseña */}
                             <div className="mb-3">
-                                <label className="form-label fw-bold" style={{ color: '#5d4037' }}>Contraseña (4 a 10 caracteres)</label>
-                                <input 
-                                    type="password" 
+                                <label className="form-label fw-bold" style={{ color: '#5d4037' }}>Contraseña</label>
+                                <input
+                                    type="password"
                                     name="password"
                                     value={formData.password}
                                     onChange={handleChange}
@@ -173,8 +273,8 @@ function Registro() {
                             {/* Campo Confirmar Contraseña */}
                             <div className="mb-4">
                                 <label className="form-label fw-bold" style={{ color: '#5d4037' }}>Confirmar Contraseña</label>
-                                <input 
-                                    type="password" 
+                                <input
+                                    type="password"
                                     name="confirmarPassword"
                                     value={formData.confirmarPassword}
                                     onChange={handleChange}
@@ -184,14 +284,33 @@ function Registro() {
                                 {errors.confirmarPassword && <div className="invalid-feedback">{errors.confirmarPassword}</div>}
                             </div>
 
-                            {/* Botón */}
-                            <button 
-                                type="submit" 
-                                className="btn w-100 text-white fw-bold py-2" 
+                            {/* Botón normal */}
+                            <button
+                                type="submit"
+                                disabled={enviando}
+                                className="btn w-100 text-white fw-bold py-2"
                                 style={{ backgroundColor: '#5d4037', border: '1px solid #fce4ec' }}
                             >
-                                Registrar
+                                {enviando ? 'Registrando...' : 'Registrar'}
                             </button>
+
+                            <div className="d-flex align-items-center my-3">
+                                <hr className="flex-grow-1 my-0" />
+                                <span className="px-2 small text-muted fw-semibold">O</span>
+                                <hr className="flex-grow-1 my-0" />
+                            </div>
+
+                            {/* Botón Google */}
+                            <div className="d-flex justify-content-center">
+                                <GoogleLogin
+                                    onSuccess={handleGoogleSuccess}
+                                    onError={handleGoogleError}
+                                    theme="outline"
+                                    size="large"
+                                    text="signup_with"
+                                    shape="rectangular"
+                                />
+                            </div>
 
                         </form>
                     </div>

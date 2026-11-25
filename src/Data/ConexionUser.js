@@ -1,130 +1,217 @@
-// URL base de tu API de usuarios (ajusta el puerto/ruta según corresponda)
-const API_URL = 'https://bakneduserf2.onrender.com/api'; 
+import { DtoUserEntrada, DtoUserSalida, DtoLogin, DtoRol } from '../ContratosApis/ContratosUser';
 
-/**
- * @typedef {Object} CreateUser
- * @property {string} nombre
- * @property {string} [apellido]
- * @property {string} [rol]
- * @property {string} email
- * @property {string} paswword
- */
+const API_URL = 'http://localhost:8080/api/v1/usuarios';
 
-/**
- * @typedef {Object} UpdateUser
- * @property {string} nombre
- * @property {string} [apellido]
- * @property {string} [rol]
- * @property {string} email
- * @property {string} paswword
- * @property {any} historialCompras
- */
+async function handleResponse(response) {
+    const contentType = response.headers.get('content-type');
+    const data = contentType && contentType.includes('application/json')
+        ? await response.json()
+        : await response.text();
+
+    if (!response.ok) {
+        const detalles = data?.errors ? Object.values(data.errors).join(', ') : '';
+        const mensaje = data?.message || (typeof data === 'string' ? data : 'Error en la petición');
+        throw new Error(detalles ? `${mensaje}: ${detalles}` : mensaje);
+    }
+
+    return data;
+}
+
+function extraerDatosGoogle(googlePayload = {}) {
+    const correo = String(googlePayload.correo || googlePayload.email || '').trim().toLowerCase();
+    const sub = String(googlePayload.sub || '').trim();
+    const nombre = String(
+        googlePayload.nombre || googlePayload.given_name || googlePayload.name || 'Usuario'
+    ).trim();
+    const apellido = String(
+        googlePayload.apellido || googlePayload.family_name || 'Google'
+    ).trim();
+
+    if (!correo || !sub) {
+        throw new Error('No se pudieron obtener el correo y el identificador (sub) desde Google.');
+    }
+
+    return { correo, nombre, apellido, sub };
+}
 
 export const userApi = {
-    // 1. Obtener todos los usuarios -> GET /users
+    // ==================== USUARIOS ====================
+
+    /** @returns {Promise<DtoUserSalida[]>} */
     async getUsers() {
-        const response = await fetch(`${API_URL}/users`);
-        const json = await response.json();
-        if (!json.success) throw new Error("Error al obtener usuarios");
-        return json.data; // Retorna el array de dtoResponse
+        const data = await handleResponse(await fetch(`${API_URL}`));
+        return Array.isArray(data) ? data.map(item => new DtoUserSalida(item)) : [];
     },
 
-    // 2. Obtener roles -> GET /roles
-    async getRoles() {
-        const response = await fetch(`${API_URL}/roles`);
-        const json = await response.json();
-        if (!json.succes && !json.success) throw new Error("Error al obtener roles");
-        return json.data;
-    },
+    /** @param {Object} rawUserData */
+    async createUser(rawUserData) {
+        const contratoEntrada = new DtoUserEntrada(rawUserData);
+        contratoEntrada.validar();
 
-    // 3. Obtener usuario por email -> GET /user/:email
-    async getUserByEmail(email) {
-        const response = await fetch(`${API_URL}/user/${email}`);
-        const json = await response.json();
-        if (!json.success) throw new Error(`No se encontró el usuario con email: ${email}`);
-        return json.data;
-    },
-
-    // 4. Crear usuario -> POST /user
-    /** @param {CreateUser} userData */
-    async createUser(userData) {
-        const response = await fetch(`${API_URL}/user`, {
+        const response = await fetch(`${API_URL}/register`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(userData),
+            body: JSON.stringify(contratoEntrada),
         });
-        const json = await response.json();
-        if (!json.success) throw new Error(json.message || "Error al crear usuario");
-        return json.data;
+        const data = await handleResponse(response);
+        return data && typeof data === 'object' ? new DtoUserSalida(data) : data;
     },
 
-    // 5. Actualizar usuario -> PUT /user/Update
-    /** @param {UpdateUser} userData */
-    // Ejemplo dentro de tu archivo de conexión (ej. ConexionUser.js)
-async updateUser(userData) {
-    const response = await fetch(`${API_URL}/user/Update`, {
+    /** @returns {Promise<DtoUserSalida>} */
+    async login(correo, password) {
+        const contratoLogin = new DtoLogin(correo, password);
+
+        const response = await fetch(`${API_URL}/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(contratoLogin),
+        });
+        const data = await handleResponse(response);
+        return new DtoUserSalida(data);
+    },
+
+async updateUserAdmin(correoActual, datos) {
+    const correoLimpio = String(correoActual || '').trim();
+    if (!correoLimpio) {
+        throw new Error('El correo actual es obligatorio para actualizar al usuario.');
+    }
+
+    const cuerpo = {};
+    ['nombre', 'apellido', 'rut', 'correo', 'password', 'rol'].forEach((campo) => {
+        const valor = datos?.[campo];
+        if (typeof valor === 'string' && valor.trim() !== '') {
+            cuerpo[campo] = valor.trim();
+        }
+    });
+
+    if (Object.keys(cuerpo).length === 0) {
+        throw new Error('No hay ningún campo para modificar.');
+    }
+
+    const response = await fetch(`${API_URL}/admin/${encodeURIComponent(correoLimpio)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(userData),
+        body: JSON.stringify(cuerpo),
     });
-    
-    const json = await response.json();
-    
-    // Si la API responde con error, lanzamos un Error con el mensaje exacto del backend
-    if (!json.success) {
-        const mensajeError = json.message || (json.errors ? json.errors.join(', ') : 'Error al actualizar usuario');
-        throw new Error(mensajeError);
-    }
-    
-    return json.data;
+    const data = await handleResponse(response);
+    return new DtoUserSalida(data);
 },
-    
-/** @param {any} userData */
-    async deleteUser(userData) {
-        // Aseguramos que enviamos un objeto JSON con la estructura que el backend espera en req.body
-        const bodyPayload = typeof userData === 'string' ? { email: userData } : userData;
 
-        const response = await fetch(`${API_URL}/users/delete`, {
+    // ==================== GOOGLE AUTH ====================
+
+    /**
+     * Inicia sesión con el JWT decodificado de Google usando /login (correo + sub).
+     * @returns {Promise<DtoUserSalida>}
+     */
+    async loginWithGoogle(googlePayload) {
+        const { correo, sub } = extraerDatosGoogle(googlePayload);
+        return await this.login(correo, sub);
+    },
+
+    /**
+     * Registra un usuario desde Google usando /register (rut en null, correo, nombre, apellido, sub).
+     * @returns {Promise<DtoUserSalida>}
+     */
+   // En ConexionUser.js -> createUserWithGoogle(googlePayload)
+async createUserWithGoogle(googlePayload) {
+    const { correo, nombre, apellido, sub } = extraerDatosGoogle(googlePayload);
+    const payload = {
+        rut: null,
+        nombre,
+        apellido,
+        correo,
+        password: sub,
+        confirmPassword: sub,
+        rol: 'cliente'
+    };
+    console.log('PAYLOAD GOOGLE A ENVIAR:', payload);
+
+    return await this.createUser(payload);
+},
+
+
+    /**
+     * Intenta iniciar sesión con Google; si aún no existe en el backend, lo crea automáticamente.
+     * @returns {Promise<DtoUserSalida>}
+     */
+    async autenticarConGoogle(googlePayload) {
+        try {
+            return await this.loginWithGoogle(googlePayload);
+        } catch {
+            return await this.createUserWithGoogle(googlePayload);
+        }
+    },
+
+    /** @returns {Promise<DtoUserSalida>} */
+    async updateUser(correoActual, passwordActual, rawNuevosDatos) {
+        const params = new URLSearchParams({
+            correo: correoActual,
+            password: passwordActual
+        });
+        const contratoEntrada = new DtoUserEntrada(rawNuevosDatos);
+
+        const response = await fetch(`${API_URL}/update?${params.toString()}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(contratoEntrada),
+        });
+        const data = await handleResponse(response);
+        return new DtoUserSalida(data);
+    },
+
+    async deleteUser(rawUserData) {
+        const payload = rawUserData && typeof rawUserData === 'object'
+            ? rawUserData
+            : { correo: rawUserData };
+
+        const response = await fetch(`${API_URL}/delete`, {
             method: 'DELETE',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(bodyPayload),
+            body: JSON.stringify(payload),
         });
-        
-        const json = await response.json();
-        if (!json.success) throw new Error(json.message || "Error al eliminar usuario");
-        return json.data;
+        return handleResponse(response);
     },
-    
-    // 7. Validar login -> POST /user/login
-    async login(email, paswword) {
-        const response = await fetch(`${API_URL}/user/login`, {
+
+    // ==================== ROLES ====================
+
+    /** @returns {Promise<DtoRol[]>} */
+    async getRoles() {
+        const data = await handleResponse(await fetch(`${API_URL}/roles`));
+        return Array.isArray(data)
+            ? data.map(item => new DtoRol(item?.nombre || item))
+            : [];
+    },
+
+    async createRol(nombreRol) {
+        const contratoRol = new DtoRol(nombreRol);
+
+        const response = await fetch(`${API_URL}/roles`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email, paswword }),
+            body: JSON.stringify(contratoRol),
         });
-        const json = await response.json();
-        if (!json.success) throw new Error(json.message || "Credenciales inválidas");
-        return json.data;
+        return handleResponse(response);
     },
 
-    async agregarHistorialCompra(email, ticket) {
-    try {
-      const response = await fetch(`${API_URL}/user/historial`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ email, ticket }),
-      })
+    async updateRol(nombreRol) {
+        const contratoRol = new DtoRol(nombreRol);
 
-      const data = await response.json()
-      if (!response.ok) {
-        throw new Error(data.message || 'Error al actualizar el historial de compras')
-      }
-      return data.data
-    } catch (error) {
-      console.error('Error en usuarioApi.agregarHistorialCompra:', error)
-      throw error
+        const response = await fetch(`${API_URL}/roles`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(contratoRol),
+        });
+        return handleResponse(response);
+    },
+
+    async deleteRol(nombreRol) {
+        const contratoRol = new DtoRol(nombreRol);
+
+        const response = await fetch(`${API_URL}/roles`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(contratoRol),
+        });
+        return handleResponse(response);
     }
-  }
 };

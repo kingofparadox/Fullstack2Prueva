@@ -1,6 +1,8 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import TablaProductos, { formatear } from '../components/TablaProductos'
+import { boletaApi } from '../Data/ConexionBoletas'
+import { construirPedidoBoleta } from '../ContratosApis/ContratoBoleta'
 
 const REGIONES = {
   'Región Metropolitana de Santiago': ['Cerrillos', 'Santiago', 'Providencia', 'Las Condes', 'Ñuñoa', 'Maipú', 'La Florida', 'Puente Alto'],
@@ -8,21 +10,30 @@ const REGIONES = {
   'Región del Biobío': ['Concepción', 'Talcahuano', 'Los Ángeles', 'Chillán'],
 }
 
-const generarCodigoOrden = () => `ORDER${Math.floor(10000 + Math.random() * 90000)}`
+const CLAVES_USUARIO = ['usuarioLogueado', 'usuario', 'user', 'authUser']
 
-const generarNroCompra = () => {
-  const hoy = new Date()
-  const fecha = `${hoy.getFullYear()}${String(hoy.getMonth() + 1).padStart(2, '0')}${String(hoy.getDate()).padStart(2, '0')}`
-  return `#${fecha}${Math.floor(100 + Math.random() * 900)}`
+const crearCodigo = (prefijo) => `${prefijo}${Math.floor(10000 + Math.random() * 90000)}`
+
+const obtenerUsuarioActivo = (usuarioProp) => {
+  if (usuarioProp && typeof usuarioProp === 'object') return usuarioProp
+  for (const clave of CLAVES_USUARIO) {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(clave) || 'null')
+      if (parsed && typeof parsed === 'object') return parsed
+    } catch {
+      // Ignorar JSON inválido
+    }
+  }
+  return null
 }
 
 function Carrito({ carrito = [], onEliminarDelCarro, usuarioLogueado }) {
   const navigate = useNavigate()
 
   const [cliente, setCliente] = useState({
-    nombre: usuarioLogueado?.nombre || '',
-    apellidos: usuarioLogueado?.apellidos || '',
-    correo: usuarioLogueado?.email || usuarioLogueado?.correo || '',
+    nombre: '',
+    apellidos: '',
+    correo: '',
     calle: '',
     departamento: '',
     region: 'Región Metropolitana de Santiago',
@@ -41,15 +52,48 @@ function Carrito({ carrito = [], onEliminarDelCarro, usuarioLogueado }) {
   const [errorForm, setErrorForm] = useState('')
   const [procesando, setProcesando] = useState(false)
 
-  const totalPagar = carrito.reduce((total, p) => total + p.precio * p.cantidad, 0)
+  useEffect(() => {
+    const user = obtenerUsuarioActivo(usuarioLogueado)
+    if (!user) return
+
+    const nombre = user.nombre || user.pnombre || user.primerNombre || user.nombreCompleto?.split(' ')[0] || ''
+    const apellidos =
+      user.apellidos ||
+      user.apellido ||
+      [user.apaterno, user.amaterno].filter(Boolean).join(' ') ||
+      [user.apellidoPaterno, user.apellidoMaterno].filter(Boolean).join(' ') ||
+      user.nombreCompleto?.split(' ').slice(1).join(' ') ||
+      ''
+    const correo = user.correo || user.email || ''
+    const rut = user.rut || user.run || ''
+
+    setCliente((prev) => ({
+      ...prev,
+      nombre: prev.nombre || nombre,
+      apellidos: prev.apellidos || apellidos,
+      correo: prev.correo || correo,
+      calle: prev.calle || user.direccion || user.calle || '',
+    }))
+
+    setTarjetaForm((prev) => ({
+      ...prev,
+      nombreTitular: prev.nombreTitular || [nombre, apellidos].filter(Boolean).join(' '),
+      rut: prev.rut || rut,
+    }))
+  }, [usuarioLogueado])
+
+  const totalPagar = carrito.reduce(
+    (total, p) => total + (Number(p.precio) || 0) * (Number(p.cantidad) || 0),
+    0
+  )
 
   const handleChange = (e) => {
     const { name, value } = e.target
-    setCliente((prev) => {
-      const nuevo = { ...prev, [name]: value }
-      if (name === 'region') nuevo.comuna = REGIONES[value][0]
-      return nuevo
-    })
+    setCliente((prev) => ({
+      ...prev,
+      [name]: value,
+      ...(name === 'region' ? { comuna: REGIONES[value][0] } : {}),
+    }))
   }
 
   const handleTarjetaChange = (e) => {
@@ -57,42 +101,77 @@ function Carrito({ carrito = [], onEliminarDelCarro, usuarioLogueado }) {
     setTarjetaForm((prev) => ({ ...prev, [name]: value }))
   }
 
-  const handlePagar = (e) => {
+  const tarjetaCompleta = () =>
+    [tarjetaForm.numeroTarjeta, tarjetaForm.nombreTitular, tarjetaForm.expiracion, tarjetaForm.cvv].every(
+      (v) => v.trim() !== ''
+    )
+
+  const irAResultado = (extraState = {}) => {
+    navigate('/resultado-pago', {
+      state: {
+        cliente,
+        tarjeta: tarjetaForm,
+        items: carrito,
+        total: totalPagar,
+        codigoOrden: crearCodigo('ORDER'),
+        nroCompra: crearCodigo('#'),
+        ...extraState,
+      },
+    })
+  }
+
+  const handlePagar = async (e) => {
     e.preventDefault()
     setErrorForm('')
 
-    // Validación de stock
-    const productoSinStock = carrito.find(p => (Number(p.stock) || 0) <= 0 || (Number(p.cantidad) > Number(p.stock)))
-    if (productoSinStock) {
-      setErrorForm(`❌ Error de inventario: El producto "${productoSinStock.nombre}" no tiene stock suficiente.`)
+    const sinStock = carrito.find((p) => {
+      const stock = Number(p.Stok ?? p.stok ?? p.stock) || 0
+      return stock <= 0 || (Number(p.cantidad) || 0) > stock
+    })
+    if (sinStock) {
+      setErrorForm(`❌ Error de inventario: El producto "${sinStock.nombre}" no tiene stock suficiente.`)
       return
     }
 
-    // Validación básica de datos del cliente
     if (!cliente.nombre.trim() || !cliente.correo.trim() || !cliente.calle.trim()) {
       setErrorForm('Por favor completa los campos obligatorios del cliente y la dirección.')
       return
     }
 
-    setProcesando(true)
+    if (!tarjetaCompleta()) {
+      irAResultado({ pagoRechazado: true })
+      return
+    }
 
-    setTimeout(() => {
-      // Enviamos todo a ResultadoPago, incluyendo los datos de la tarjeta para que allá se evalúe el éxito/error
-      navigate('/resultado-pago', {
-        state: {
-          cliente,
-          tarjeta: tarjetaForm,
-          items: carrito,
-          total: totalPagar,
-          codigoOrden: generarCodigoOrden(),
-          nroCompra: generarNroCompra(),
-        },
+    const userActivo = obtenerUsuarioActivo(usuarioLogueado)
+    const correoComprador = (cliente.correo || userActivo?.correo || userActivo?.email || '').trim()
+
+    if (!correoComprador) {
+      setErrorForm('Debes ingresar un correo o iniciar sesión para emitir la boleta.')
+      return
+    }
+
+    try {
+      setProcesando(true)
+      // Valida el pedido con el contrato antes de llamar al backend
+      construirPedidoBoleta(carrito)
+
+      const boletaCreada = await boletaApi.createBoleta(correoComprador, carrito)
+      irAResultado({
+        boleta: boletaCreada,
+        total: boletaCreada?.total ?? totalPagar,
+        codigoOrden: boletaCreada?.id ? `BOLETA-${boletaCreada.id}` : crearCodigo('ORDER'),
+        nroCompra: boletaCreada?.id ? `#${boletaCreada.id}` : crearCodigo('#'),
       })
+    } catch (error) {
+      console.error('Error al procesar el pago y generar la boleta:', error)
+      setErrorForm(`❌ No se pudo completar la compra: ${error.message || 'Error en el servidor'}`)
+    } finally {
       setProcesando(false)
-    }, 800)
+    }
   }
 
-  const campo = (name, label, { requerido = false, placeholder = '', type = 'text' } = {}) => (
+  const renderCampo = (name, label, { requerido = false, placeholder = '', type = 'text' } = {}) => (
     <div className="mb-3">
       <label htmlFor={name} className="form-label fw-semibold">
         {label}
@@ -120,7 +199,11 @@ function Carrito({ carrito = [], onEliminarDelCarro, usuarioLogueado }) {
                 <h1>🛒 Carrito de compra y Pago</h1>
                 {carrito.length > 0 && <h4 className="fw-bold">Total a pagar: {formatear(totalPagar)}</h4>}
               </div>
-              <Link to="/ventas" className="btn btn-sm fw-bold text-dark border border-dark" style={{ backgroundColor: '#bde0fe' }}>
+              <Link
+                to="/ventas"
+                className="btn btn-sm fw-bold text-dark border border-dark"
+                style={{ backgroundColor: '#bde0fe' }}
+              >
                 ← Volver a Productos
               </Link>
             </div>
@@ -144,17 +227,23 @@ function Carrito({ carrito = [], onEliminarDelCarro, usuarioLogueado }) {
                 <TablaProductos items={carrito} onEliminar={onEliminarDelCarro} />
 
                 <form onSubmit={handlePagar} className="mt-4">
-                  <h3 className="border-top border-secondary pt-4" style={{ color: '#5d4037' }}>Información del cliente</h3>
+                  <h3 className="border-top border-secondary pt-4" style={{ color: '#5d4037' }}>
+                    Información del cliente
+                  </h3>
                   <div className="row">
-                    <div className="col-md-4">{campo('nombre', 'Nombre', { requerido: true })}</div>
-                    <div className="col-md-4">{campo('apellidos', 'Apellidos (opcional)')}</div>
-                    <div className="col-md-4">{campo('correo', 'Correo', { requerido: true, type: 'email' })}</div>
+                    <div className="col-md-4">{renderCampo('nombre', 'Nombre', { requerido: true })}</div>
+                    <div className="col-md-4">{renderCampo('apellidos', 'Apellidos (opcional)')}</div>
+                    <div className="col-md-4">{renderCampo('correo', 'Correo', { requerido: true, type: 'email' })}</div>
                   </div>
 
-                  <h3 className="mt-3" style={{ color: '#5d4037' }}>Dirección de entrega</h3>
+                  <h3 className="mt-3" style={{ color: '#5d4037' }}>
+                    Dirección de entrega
+                  </h3>
                   <div className="row">
-                    <div className="col-md-8">{campo('calle', 'Calle', { requerido: true })}</div>
-                    <div className="col-md-4">{campo('departamento', 'Departamento (opcional)', { placeholder: 'Ej: 603' })}</div>
+                    <div className="col-md-8">{renderCampo('calle', 'Calle', { requerido: true })}</div>
+                    <div className="col-md-4">
+                      {renderCampo('departamento', 'Departamento (opcional)', { placeholder: 'Ej: 603' })}
+                    </div>
                   </div>
 
                   <div className="row">
@@ -188,9 +277,10 @@ function Carrito({ carrito = [], onEliminarDelCarro, usuarioLogueado }) {
                     />
                   </div>
 
-                  {/* TARJETA (SI SE DEJA VACÍA, RESULTADO DE PAGO DARÁ ERROR 100%) */}
                   <div className="card mt-4 p-3 border-secondary bg-white">
-                    <h3 className="fw-bold mb-3 fs-5" style={{ color: '#5d4037' }}>Medio de Pago: Tarjeta Débito / Crédito</h3>
+                    <h3 className="fw-bold mb-3 fs-5" style={{ color: '#5d4037' }}>
+                      Medio de Pago: Tarjeta Débito / Crédito
+                    </h3>
                     <div className="row g-3">
                       <div className="col-12 col-md-6">
                         <label className="form-label small fw-bold">Número de Tarjeta</label>
@@ -215,7 +305,7 @@ function Carrito({ carrito = [], onEliminarDelCarro, usuarioLogueado }) {
                         />
                       </div>
                       <div className="col-12 col-md-4">
-                        <label className="form-label small fw-bold">RUN / RUT del Titular</label>
+                        <label className="form-label small fw-bold">RUN / RUT del Titular (opcional)</label>
                         <input
                           type="text"
                           name="rut"

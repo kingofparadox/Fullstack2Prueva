@@ -1,53 +1,83 @@
-// URL base de tu API (puedes ajustar el puerto o dominio si es diferente)
-const API_URL = 'https://boleta-pedido.onrender.com/api'; // O la URL base de tu backend
+import { DtoBoletas, construirPedidoBoleta } from '../ContratosApis/ContratoBoleta';
 
+const API_URL = 'http://localhost:8080/api/v1/boletas';
 
-export const documentoApi = {
-    // Crear Documento (Boleta o Pedido) -> POST /documento
-    async crearDocumento(documentoData) {
-        const response = await fetch(`${API_URL}/documento`, {
+async function handleResponse(response) {
+    const contentType = response.headers.get('content-type');
+    const data = contentType && contentType.includes('application/json')
+        ? await response.json()
+        : await response.text();
+
+    if (!response.ok) {
+        const detalles = data?.errors ? Object.values(data.errors).join(', ') : '';
+        const mensaje = data?.message || (typeof data === 'string' ? data : 'Error en la petición de boletas');
+        throw new Error(detalles ? `${mensaje}: ${detalles}` : mensaje);
+    }
+
+    return data;
+}
+
+export const boletaApi = {
+    /**
+     * Crea una boleta para el usuario indicado por correo a partir de los ítems del carrito.
+     * POST /api/v1/boletas/{correo}
+     */
+    async createBoleta(correo, itemsCarrito) {
+        const correoLimpio = String(correo || '').trim();
+        if (!correoLimpio) {
+            throw new Error('El correo del usuario es obligatorio para generar la boleta.');
+        }
+
+        const pedidoNormalizado = construirPedidoBoleta(itemsCarrito);
+
+        const response = await fetch(`${API_URL}/${encodeURIComponent(correoLimpio)}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(documentoData),
+            body: JSON.stringify(pedidoNormalizado),
         });
-        const json = await response.json();
-        if (!json.success) throw new Error(json.message || "Error al crear el documento");
-        return json.data;
+
+        const data = await handleResponse(response);
+        return new DtoBoletas(data);
     },
 
-    // Obtener Documento por ID -> GET /documento/:id
-    async obtenerDocumento(id) {
-        const response = await fetch(`${API_URL}/documento/${id}`);
-        const json = await response.json();
-        if (!json.success) throw new Error("Error al obtener el documento");
-        return json.data;
+    /**
+     * Lista todas las boletas registradas.
+     * GET /api/v1/boletas
+     */
+    async getBoletas() {
+        const data = await handleResponse(await fetch(`${API_URL}`));
+        return Array.isArray(data) ? data.map((item) => new DtoBoletas(item)) : [];
     },
 
-    // Listar Documentos -> GET /documento?tipo=...
-    async listarDocumentos(tipo = '') {
-        const url = tipo ? `${API_URL}/documento?tipo=${tipo}` : `${API_URL}/documento`;
-        const response = await fetch(url);
-        const json = await response.json();
-        if (!json.success) throw new Error("Error al listar los documentos");
-        return json.data;
+    /**
+     * Lista las boletas asociadas al correo de un usuario.
+     * GET /api/v1/boletas/usuario/{correo}
+     */
+    async getBoletasByUsuario(correo) {
+        const correoLimpio = String(correo || '').trim();
+        if (!correoLimpio) {
+            throw new Error('El correo es obligatorio para consultar las boletas del usuario.');
+        }
+
+        const data = await handleResponse(
+            await fetch(`${API_URL}/usuario/${encodeURIComponent(correoLimpio)}`)
+        );
+        return Array.isArray(data) ? data.map((item) => new DtoBoletas(item)) : [];
     },
 
-    // Obtener pedidos pendientes -> GET /documentos/pendientes
-    async obtenerPendientes() {
-        const response = await fetch(`${API_URL}/documentos/pendientes`);
-        const json = await response.json();
-        if (!json.success) throw new Error("Error al obtener pedidos pendientes");
-        return json.data;
-    },
+    /**
+     * Elimina una boleta por su ID.
+     * DELETE /api/v1/boletas/{id}
+     */
+    async deleteBoleta(id) {
+        if (id === undefined || id === null || id === '') {
+            throw new Error('El ID de la boleta es obligatorio para eliminarla.');
+        }
 
-    // Despachar pedido -> PATCH /documento/:id/despachar
-    async despacharPedido(id) {
-        const response = await fetch(`${API_URL}/documento/${id}/despachar`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
+        const response = await fetch(`${API_URL}/${encodeURIComponent(id)}`, {
+            method: 'DELETE',
         });
-        const json = await response.json();
-        if (!json.success) throw new Error("Error al despachar el pedido");
-        return json.data;
-    }
+
+        return handleResponse(response);
+    },
 };

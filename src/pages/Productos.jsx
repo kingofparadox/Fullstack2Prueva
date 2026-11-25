@@ -1,24 +1,43 @@
 import { useState, useEffect } from 'react'
-import Card from '../components/cartas'
 import { Link } from 'react-router-dom'
+import Card from '../components/cartas'
 import { productApi } from '../Data/ConexionProducto'
 
-function Productos({ onAgregarAlCarro, carrito }) {
+function obtenerNombreCategoria(item) {
+  if (!item) return ''
+  if (typeof item === 'string') return item
+  return item.cnombre || item.Categoria || item.categoria || item.nombre || ''
+}
+
+function Productos({ onAgregarAlCarro, carrito = [] }) {
   const [productos, setProductos] = useState([])
+  const [categoriasBackend, setCategoriasBackend] = useState([])
   const [loading, setLoading] = useState(true)
 
   // Estados para los filtros
   const [categoriaSeleccionada, setCategoriaSeleccionada] = useState('')
   const [precioMin, setPrecioMin] = useState('')
   const [precioMax, setPrecioMax] = useState('')
-  const [soloDescuentos, setSoloDescuentos] = useState(false) // Nuevo estado para el checkbox de descuentos
+  const [soloDescuentos, setSoloDescuentos] = useState(false)
+
+  // Aviso al agregar al carrito
+  const [aviso, setAviso] = useState(null)
 
   useEffect(() => {
-    const obtenerProductos = async () => {
+    const cargarDatos = async () => {
       try {
         setLoading(true)
-        const datos = await productApi.getProducts()
-        setProductos(datos || [])
+        const [datosProductos, datosCategorias] = await Promise.all([
+          productApi.getProducts(),
+          typeof productApi.getCategories === 'function'
+            ? productApi.getCategories().catch(() => [])
+            : typeof productApi.getCategorias === 'function'
+              ? productApi.getCategorias().catch(() => [])
+              : Promise.resolve([])
+        ])
+
+        setProductos(datosProductos || [])
+        setCategoriasBackend(Array.isArray(datosCategorias) ? datosCategorias : [])
       } catch (error) {
         console.error('Error al obtener productos:', error)
         setProductos([])
@@ -27,24 +46,49 @@ function Productos({ onAgregarAlCarro, carrito }) {
       }
     }
 
-    obtenerProductos()
+    cargarDatos()
   }, [])
 
-  // Extraemos las categorías únicas de los productos para poblar el selector automáticamente[cite: 10]
-  const categoriasDisponibles = [...new Set(productos.map(p => p.categoria).filter(Boolean))]
+  // El aviso desaparece solo a los 2.5 segundos
+  useEffect(() => {
+    if (!aviso) return
+    const t = setTimeout(() => setAviso(null), 2500)
+    return () => clearTimeout(t)
+  }, [aviso])
 
-  // Lógica de filtrado actualizada con la condición de descuentos
+  const handleAgregar = (producto, ...resto) => {
+    onAgregarAlCarro(producto, ...resto)
+    const nombre = producto?.nombre || 'Producto'
+    setAviso(`✅ "${nombre}" se agregó al carrito`)
+  }
+
+  const totalItems = carrito.reduce((acc, p) => acc + (Number(p.cantidad) || 0), 0)
+
+  // Combinamos categorías del endpoint con las encontradas en productos para no perder ninguna
+  const categoriasDesdeProductos = productos
+    .map((p) => obtenerNombreCategoria(p))
+    .filter(Boolean)
+
+  const categoriasDesdeApi = categoriasBackend
+    .map((c) => obtenerNombreCategoria(c))
+    .filter(Boolean)
+
+  const categoriasDisponibles = [...new Set([...categoriasDesdeApi, ...categoriasDesdeProductos])]
+
+  // Lógica de filtrado
   const productosFiltrados = productos.filter((producto) => {
-    // Filtro por categoría[cite: 10]
-    const cumpleCategoria = categoriaSeleccionada === '' || producto.categoria === categoriaSeleccionada
+    const catProd = obtenerNombreCategoria(producto)
+    const cumpleCategoria =
+      categoriaSeleccionada === '' ||
+      catProd.toLowerCase() === categoriaSeleccionada.toLowerCase()
 
-    // Filtro por precio mínimo y máximo[cite: 10]
+    // Filtro por precio mínimo y máximo
     const precioProducto = Number(producto.precio) || 0
     const cumpleMin = precioMin === '' || precioProducto >= Number(precioMin)
     const cumpleMax = precioMax === '' || precioProducto <= Number(precioMax)
 
     // Filtro por productos con descuento (Stock > 10)
-    const stockVal = Number(producto.stock) || 0
+    const stockVal = Number(producto.stock ?? producto.Stok) || 0
     const cumpleDescuento = !soloDescuentos || stockVal > 10
 
     return cumpleCategoria && cumpleMin && cumpleMax && cumpleDescuento
@@ -52,11 +96,24 @@ function Productos({ onAgregarAlCarro, carrito }) {
 
   return (
     <div className="container py-5">
+      {aviso && (
+        <div
+          className="position-fixed top-0 end-0 m-3 alert alert-success shadow fw-bold"
+          style={{ zIndex: 1080 }}
+          role="alert"
+        >
+          {aviso}
+        </div>
+      )}
+
       <div className="d-flex justify-content-between align-items-center mb-4">
         <div>
           <h1>Catálogo de Productos</h1>
           <p>Explora y añade tus coleccionables favoritos. ꒰ঌ(˶ˆᗜˆ˵)໒꒱ .ᐟ.ᐟ</p>
         </div>
+        <Link to="/carrito" className="btn btn-dark fw-bold">
+          🛒 Carrito ({totalItems})
+        </Link>
       </div>
 
       <hr className="border-secondary mb-4" />
@@ -65,25 +122,25 @@ function Productos({ onAgregarAlCarro, carrito }) {
       <div className="card shadow-sm border-secondary mb-4 p-3" style={{ backgroundColor: '#fce4ec' }}>
         <h5 className="fw-bold mb-3" style={{ color: '#5d4037' }}>🔍 Filtrar Productos</h5>
         <div className="row g-3">
-          {/* Filtro por Categoría[cite: 10] */}
+          {/* Filtro por Categoría */}
           <div className="col-md-4">
             <label className="form-label small fw-bold text-uppercase" style={{ color: '#5d4037' }}>Categoría</label>
-            <select 
+            <select
               className="form-select border-secondary"
               value={categoriaSeleccionada}
               onChange={(e) => setCategoriaSeleccionada(e.target.value)}
             >
               <option value="">Todas las categorías</option>
               {categoriasDisponibles.map((cat, index) => (
-                <option key={index} value={cat}>{cat}</option>
+                <option key={`${cat}-${index}`} value={cat}>{cat}</option>
               ))}
             </select>
           </div>
 
-          {/* Filtro por Precio Mínimo[cite: 10] */}
+          {/* Filtro por Precio Mínimo */}
           <div className="col-md-3">
             <label className="form-label small fw-bold text-uppercase" style={{ color: '#5d4037' }}>Precio Mínimo ($)</label>
-            <input 
+            <input
               type="number"
               className="form-control border-secondary"
               placeholder="Ej. 1000"
@@ -92,10 +149,10 @@ function Productos({ onAgregarAlCarro, carrito }) {
             />
           </div>
 
-          {/* Filtro por Precio Máximo[cite: 10] */}
+          {/* Filtro por Precio Máximo */}
           <div className="col-md-3">
             <label className="form-label small fw-bold text-uppercase" style={{ color: '#5d4037' }}>Precio Máximo ($)</label>
-            <input 
+            <input
               type="number"
               className="form-control border-secondary"
               placeholder="Ej. 50000"
@@ -104,9 +161,9 @@ function Productos({ onAgregarAlCarro, carrito }) {
             />
           </div>
 
-          {/* Botón para limpiar filtros[cite: 10] */}
+          {/* Botón para limpiar filtros */}
           <div className="col-md-2 d-flex align-items-end">
-            <button 
+            <button
               className="btn btn-outline-dark w-100 fw-bold"
               onClick={() => {
                 setCategoriaSeleccionada('')
@@ -122,7 +179,7 @@ function Productos({ onAgregarAlCarro, carrito }) {
           {/* Checkbox: Solo ver productos con descuentos */}
           <div className="col-12 d-flex align-items-center mt-2">
             <div className="form-check">
-              <input 
+              <input
                 className="form-check-input border-secondary"
                 type="checkbox"
                 id="checkDescuentos"
@@ -137,7 +194,7 @@ function Productos({ onAgregarAlCarro, carrito }) {
         </div>
       </div>
 
-      {/* Si está cargando mostramos un indicador, de lo contrario renderizamos las cartas filtradas[cite: 10] */}
+      {/* Si está cargando mostramos un indicador, de lo contrario renderizamos las cartas filtradas */}
       {loading ? (
         <div className="text-center py-5">
           <div className="spinner-border text-dark" role="status">
@@ -145,7 +202,7 @@ function Productos({ onAgregarAlCarro, carrito }) {
           </div>
         </div>
       ) : productosFiltrados.length > 0 ? (
-        <Card productos={productosFiltrados} onAgregarAlCarro={onAgregarAlCarro} />
+        <Card productos={productosFiltrados} onAgregarAlCarro={handleAgregar} />
       ) : (
         <div className="alert alert-warning text-center py-4">
           No se encontraron productos que coincidan con los filtros seleccionados.

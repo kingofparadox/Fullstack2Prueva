@@ -20,9 +20,14 @@ function Card({ productos, onAgregarAlCarro }) {
       {productos.map((producto, index) => {
         const nombreProducto = producto.nombre || 'Sin nombre'
         const keyUnica = producto.cBarras || producto.Cbarras || producto.codigoBarras || producto.id || nombreProducto || index
-        const imgPath = producto.imagen || producto.imagenPath || 'https://via.placeholder.com/300'
+        const rawPath = Array.isArray(producto.path) && producto.path.length > 0
+          ? producto.path[0]
+          : (typeof producto.path === 'string' ? producto.path : '')
+
+        const imgPath = rawPath.toLowerCase()
+
         const precioVal = Number(producto.precio) || 0
-        const stockVal = Number(producto.stock) || 0
+        const stockVal = Number(producto.Stok ?? producto.stock) || 0
 
         // Oferta aplicada automáticamente si el stock es mayor a 10
         const tieneOferta = stockVal > 10
@@ -67,7 +72,7 @@ function Card({ productos, onAgregarAlCarro }) {
                   )}
                 </div>
 
-                <p className="small text-muted mb-3">Stock disponible: {producto.stock ?? 'N/A'}</p>
+                <p className="small text-muted mb-3">Stock disponible: {stockVal}</p>
 
                 <div className="mb-2">
                   <Contador

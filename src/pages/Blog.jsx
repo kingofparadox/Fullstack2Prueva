@@ -1,21 +1,24 @@
 import { useState, useEffect } from 'react'
 import '../index.css'
 import CartasBlog from '../components/cartasBlog'
-import { noticiaApi } from '../Data/ConexionBlog'
+import { blogApi } from '../Data/ConexionBlog'
 
 function Blog() {
-    const [noticias, setNoticias] = useState([])
+    const [blogs, setBlogs] = useState([])
     const [loading, setLoading] = useState(true)
+    const [errorMsg, setErrorMsg] = useState('')
 
     useEffect(() => {
         const cargarPublicaciones = async () => {
             try {
                 setLoading(true)
-                const datos = await noticiaApi.getNoticias()
-                setNoticias(datos || [])
+                setErrorMsg('')
+                const datos = await blogApi.getBlogs()
+                setBlogs(datos || [])
             } catch (error) {
                 console.error('Error al cargar las publicaciones del blog:', error)
-                setNoticias([])
+                setErrorMsg(error.message || 'No se pudieron cargar las publicaciones.')
+                setBlogs([])
             } finally {
                 setLoading(false)
             }
@@ -52,8 +55,12 @@ function Blog() {
                                         <span className="visually-hidden">Cargando publicaciones...</span>
                                     </div>
                                 </div>
+                            ) : errorMsg ? (
+                                <div className="alert alert-danger text-center" role="alert">
+                                    {errorMsg}
+                                </div>
                             ) : (
-                                <CartasBlog posts={noticias} />
+                                <CartasBlog posts={blogs} />
                             )}
 
                         </div>

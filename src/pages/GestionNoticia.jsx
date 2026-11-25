@@ -1,64 +1,81 @@
 import { useState, useEffect } from 'react'
-import { noticiaApi } from '../Data/ConexionBlog'
+import { blogApi } from '../Data/ConexionBlog'
 import { useNavigate } from 'react-router-dom'
+
+function obtenerBloque(item, tipoBuscado) {
+  const bloques = Array.isArray(item?.contenidoJson)
+    ? item.contenidoJson
+    : Array.isArray(item?.contenido)
+      ? item.contenido
+      : []
+
+  const encontrado = bloques.find(
+    (b) => (b?.tipo || '').toLowerCase() === tipoBuscado.toLowerCase()
+  )
+  return encontrado?.contenido || ''
+}
+
+function extraerBloquesCuerpo(item) {
+  const bloques = Array.isArray(item?.contenidoJson)
+    ? item.contenidoJson
+    : Array.isArray(item?.contenido)
+      ? item.contenido
+      : []
+
+  const filtrados = bloques
+    .filter((b) => {
+      const tipo = (b?.tipo || '').toLowerCase()
+      return tipo !== 'portada' && tipo !== 'resumen'
+    })
+    .map((b) => ({
+      tipo: (b?.tipo || 'parrafo').toLowerCase(),
+      contenido: b?.contenido || '',
+      caption: b?.caption || ''
+    }))
+
+  return filtrados.length > 0
+    ? filtrados
+    : [{ tipo: 'parrafo', contenido: '', caption: '' }]
+}
 
 function GestionNoticias() {
   const navigate = useNavigate()
-  const [noticias, setNoticias] = useState([])
-  const [seleccionada, setSeleccionada] = useState(null)
+  const [blogs, setBlogs] = useState([])
+  const [seleccionado, setSeleccionado] = useState(null)
   const [loading, setLoading] = useState(false)
 
-  const [tarjetaForm, setTarjetaForm] = useState({
+  const [formBlog, setFormBlog] = useState({
+    rutAutor: '',
     titulo: '',
-    slug: '',
     resumen: '',
     imagenPortada: '',
-    categoria: 'Novedades',
-    autor: 'Equipo AnimeWord',
-    destacado: false
+    fecha: ''
   })
 
   const [previewImagen, setPreviewImagen] = useState('')
   const [isDragging, setIsDragging] = useState(false)
 
-  const [introduccion, setIntroduccion] = useState('')
   const [secciones, setSecciones] = useState([
     { tipo: 'parrafo', contenido: '', caption: '' }
   ])
 
-  const cargarNoticias = async () => {
+  const cargarBlogs = async () => {
     try {
       setLoading(true)
-      const datos = await noticiaApi.getNoticias()
-      setNoticias(datos || [])
+      const datos = await blogApi.getBlogs()
+      setBlogs(Array.isArray(datos) ? datos : [])
     } catch (error) {
-      console.error('Error al cargar noticias:', error)
+      console.error('Error al cargar blogs:', error)
     } finally {
       setLoading(false)
     }
   }
 
   useEffect(() => {
-    cargarNoticias()
+    cargarBlogs()
   }, [])
 
-  const handleTituloChange = (e) => {
-    const tituloVal = e.target.value
-    const slugGenerado = tituloVal
-      .toLowerCase()
-      .trim()
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .replace(/[^a-z0-9 -]/g, '')
-      .replace(/\s+/g, '-')
-      .replace(/-+/g, '-')
-
-    setTarjetaForm(prev => ({
-      ...prev,
-      titulo: tituloVal,
-      slug: slugGenerado
-    }))
-  }
+  const normalizarRuta = (ruta) => (typeof ruta === 'string' ? ruta.toLowerCase() : '')
 
   const procesarArchivoPortada = async (file) => {
     if (!file || !file.type.startsWith('image/')) {
@@ -82,8 +99,9 @@ function GestionNoticias() {
 
         const resultado = await response.json()
         if (resultado.success) {
-          setTarjetaForm(prev => ({ ...prev, imagenPortada: resultado.path }))
-          setPreviewImagen(resultado.path)
+          const rutaLimpia = normalizarRuta(resultado.path)
+          setFormBlog(prev => ({ ...prev, imagenPortada: rutaLimpia }))
+          setPreviewImagen(rutaLimpia)
         } else {
           alert('Error al guardar la imagen en el servidor.')
         }
@@ -115,7 +133,7 @@ function GestionNoticias() {
 
         const resultado = await response.json()
         if (resultado.success) {
-          handleCambiarSeccion(index, 'contenido', resultado.path)
+          handleCambiarSeccion(index, 'contenido', normalizarRuta(resultado.path))
         } else {
           alert('Error al guardar la imagen de la sección.')
         }
@@ -132,109 +150,131 @@ function GestionNoticias() {
   const handleCambiarSeccion = (index, campo, valor) => {
     setSecciones(prev => {
       const copia = [...prev]
-      copia[index][campo] = valor
+      copia[index] = { ...copia[index], [campo]: valor }
       return copia
     })
   }
 
   const handleEliminarSeccion = (index) => {
     if (secciones.length === 1) {
-      alert('El artículo debe tener al menos una sección de contenido.')
+      alert('El artículo debe tener al menos un bloque de contenido.')
       return
     }
     setSecciones(prev => prev.filter((_, i) => i !== index))
   }
 
-  const handleSelectNoticia = (noticia) => {
-    setSeleccionada(noticia)
-    const imgPortada = noticia.tarjeta?.imagenPortada || ''
+  const handleSelectBlog = (blogItem) => {
+    setSeleccionado(blogItem)
 
-    if (noticia.tarjeta) {
-      setTarjetaForm({
-        titulo: noticia.tarjeta.titulo || '',
-        slug: noticia.tarjeta.slug || '',
-        resumen: noticia.tarjeta.resumen || '',
-        imagenPortada: imgPortada,
-        categoria: noticia.tarjeta.categoria || 'Novedades',
-        autor: noticia.tarjeta.autor || 'Equipo AnimeWord',
-        destacado: Boolean(noticia.tarjeta.destacado)
-      })
-      setPreviewImagen(imgPortada)
-    }
+    const portadaVal = normalizarRuta(
+      blogItem.portada || obtenerBloque(blogItem, 'portada')
+    )
+    const resumenVal =
+      blogItem.resumen || obtenerBloque(blogItem, 'resumen')
 
-    if (noticia.articulo) {
-      setIntroduccion(noticia.articulo.introduccion || '')
-      setSecciones(
-        noticia.articulo.secciones && noticia.articulo.secciones.length > 0
-          ? noticia.articulo.secciones
-          : [{ tipo: 'parrafo', contenido: '', caption: '' }]
-      )
-    }
+    setFormBlog({
+      rutAutor: blogItem.autor?.rut || '',
+      titulo: blogItem.titulo || '',
+      resumen: resumenVal,
+      imagenPortada: portadaVal,
+      fecha: blogItem.fecha || ''
+    })
+    setPreviewImagen(portadaVal)
+    setSecciones(extraerBloquesCuerpo(blogItem))
   }
 
   const handleLimpiarForm = () => {
-    setSeleccionada(null)
-    setTarjetaForm({
+    setSeleccionado(null)
+    setFormBlog({
+      rutAutor: '',
       titulo: '',
-      slug: '',
       resumen: '',
       imagenPortada: '',
-      categoria: 'Novedades',
-      autor: 'Equipo AnimeWord',
-      destacado: false
+      fecha: ''
     })
     setPreviewImagen('')
-    setIntroduccion('')
     setSecciones([{ tipo: 'parrafo', contenido: '', caption: '' }])
   }
 
   const handleSubmit = async (e) => {
     e.preventDefault()
 
-    if (!tarjetaForm.titulo.trim() || !tarjetaForm.imagenPortada.trim()) {
-      alert('Por favor, ingresa un título y una imagen de portada válida.')
+    if (!formBlog.titulo.trim()) {
+      alert('Por favor, ingresa un título para la publicación.')
       return
     }
 
-    const payloadDTO = {
-      tarjeta: { ...tarjetaForm },
-      articulo: {
-        introduccion: introduccion,
-        secciones: secciones.filter(sec => sec.contenido.trim() !== '')
+    const bloquesContenido = []
+
+    if (formBlog.imagenPortada.trim()) {
+      bloquesContenido.push({
+        tipo: 'portada',
+        contenido: normalizarRuta(formBlog.imagenPortada.trim())
+      })
+    }
+
+    if (formBlog.resumen.trim()) {
+      bloquesContenido.push({
+        tipo: 'resumen',
+        contenido: formBlog.resumen.trim()
+      })
+    }
+
+    secciones.forEach((sec) => {
+      if (sec.contenido && sec.contenido.trim() !== '') {
+        bloquesContenido.push({
+          tipo: sec.tipo,
+          contenido: sec.tipo === 'imagen'
+            ? normalizarRuta(sec.contenido.trim())
+            : sec.contenido.trim()
+        })
       }
+    })
+
+    const fechaEnvio = formBlog.fecha || new Date().toISOString().slice(0, 19)
+
+    const payload = {
+      blog: {
+        titulo: formBlog.titulo.trim(),
+        fecha: fechaEnvio
+      },
+      contenido: bloquesContenido
     }
 
     try {
-      if (seleccionada) {
-        const slug = seleccionada.tarjeta?.slug || seleccionada.slug
-        await noticiaApi.updateNoticia(slug, payloadDTO)
-        alert('¡Noticia actualizada con éxito!')
+      if (seleccionado) {
+        await blogApi.updateBlog(payload)
+        alert('¡Publicación actualizada con éxito!')
       } else {
-        await noticiaApi.createNoticia(payloadDTO)
-        alert('¡Noticia publicada con éxito!')
+        if (!formBlog.rutAutor.trim()) {
+          alert('Por favor, ingresa el RUT del autor para crear la publicación.')
+          return
+        }
+        await blogApi.createBlog(formBlog.rutAutor.trim(), payload)
+        alert('¡Publicación creada con éxito!')
       }
 
-      await cargarNoticias()
+      await cargarBlogs()
       handleLimpiarForm()
     } catch (error) {
-      console.error('Error al guardar la noticia:', error)
+      console.error('Error al guardar la publicación:', error)
       alert(`Ocurrió un error: ${error.message || 'Error en la solicitud'}`)
     }
   }
 
   const handleEliminar = async () => {
-    if (!seleccionada) return
+    if (!seleccionado) return
 
-    const slug = seleccionada.tarjeta?.slug || seleccionada.slug
+    const tituloEliminar = seleccionado.titulo
 
-    if (window.confirm(`¿Estás seguro de eliminar la noticia "${seleccionada.tarjeta?.titulo}"?`)) {
+    if (window.confirm(`¿Estás seguro de eliminar la publicación "${tituloEliminar}"?`)) {
       try {
-        await noticiaApi.deleteNoticia(slug)
-        alert('¡Noticia eliminada correctamente!')
-        await cargarNoticias()
+        await blogApi.deleteBlog(tituloEliminar)
+        alert('¡Publicación eliminada correctamente!')
+        await cargarBlogs()
         handleLimpiarForm()
       } catch (error) {
-        console.error('Error al eliminar noticia:', error)
+        console.error('Error al eliminar publicación:', error)
         alert(`No se pudo eliminar: ${error.message || 'Error de red'}`)
       }
     }
@@ -259,29 +299,35 @@ function GestionNoticias() {
         <div className="col-12 col-lg-5">
           <div className="card shadow-sm border-0">
             <div className="card-header text-white d-flex justify-content-between align-items-center" style={{ backgroundColor: '#5d4037' }}>
-              <span className="fw-bold text-uppercase">Publicaciones ({noticias.length})</span>
-              <button className="btn btn-sm btn-light text-dark fw-bold" onClick={handleLimpiarForm}>
-                + Nueva Noticia
+              <span className="fw-bold text-uppercase">Publicaciones ({blogs.length})</span>
+              <button type="button" className="btn btn-sm btn-light text-dark fw-bold" onClick={handleLimpiarForm}>
+                + Nueva Publicación
               </button>
             </div>
             <div className="card-body p-0" style={{ maxHeight: '600px', overflowY: 'auto' }}>
               {loading ? (
-                <div className="text-center py-4 text-muted">Cargando noticias...</div>
-              ) : noticias.length === 0 ? (
+                <div className="text-center py-4 text-muted">Cargando publicaciones...</div>
+              ) : blogs.length === 0 ? (
                 <div className="text-center py-4 text-muted">No hay publicaciones registradas.</div>
               ) : (
                 <div className="list-group list-group-flush">
-                  {noticias.map((item, idx) => {
-                    const isSelected = (seleccionada?.id && seleccionada.id === item.id) ||
-                                       (seleccionada?.tarjeta?.slug && seleccionada.tarjeta.slug === item.tarjeta?.slug)
-                    
-                    const imgUrl = item.tarjeta?.imagenPortada || 'https://via.placeholder.com/60'
+                  {blogs.map((item, idx) => {
+                    const isSelected = seleccionado?.titulo === item.titulo
+                    const imgUrl = normalizarRuta(
+                      item.portada || obtenerBloque(item, 'portada')
+                    ) || 'https://via.placeholder.com/60'
+                    const nombreAutor =
+                      item.autor?.nombre ||
+                      item.autor?.nick ||
+                      item.autor?.correo ||
+                      'Equipo AnimeWord'
 
                     return (
                       <button
-                        key={item.id || item.tarjeta?.slug || idx}
-                        onClick={() => handleSelectNoticia(item)}
-                        className={`list-group-item list-group-item-action p-3 ${isSelected ? 'bg-light border-start border-4 border-danger' : ''}`}
+                        type="button"
+                        key={`${item.titulo}-${idx}`}
+                        onClick={() => handleSelectBlog(item)}
+                        className={`list-group-item list-group-item-action p-3 text-start ${isSelected ? 'bg-light border-start border-4 border-danger' : ''}`}
                       >
                         <div className="d-flex align-items-center gap-3">
                           <img
@@ -290,11 +336,11 @@ function GestionNoticias() {
                             style={{ width: '60px', height: '60px', objectFit: 'cover', borderRadius: '8px' }}
                           />
                           <div>
-                            <span className="badge bg-secondary mb-1">{item.tarjeta?.categoria || 'Blog'}</span>
+                            <span className="badge bg-secondary mb-1">Blog</span>
                             <h6 className="mb-0 fw-bold text-truncate" style={{ maxWidth: '220px' }}>
-                              {item.tarjeta?.titulo || 'Sin título'}
+                              {item.titulo || 'Sin título'}
                             </h6>
-                            <small className="text-muted">{item.tarjeta?.autor}</small>
+                            <small className="text-muted">{nombreAutor}</small>
                           </div>
                         </div>
                       </button>
@@ -309,52 +355,41 @@ function GestionNoticias() {
         <div className="col-12 col-lg-7">
           <div className="card shadow-sm border-0" style={{ backgroundColor: '#fce4ec' }}>
             <div className="card-header text-white fw-bold py-2 text-uppercase" style={{ backgroundColor: '#5d4037' }}>
-              {seleccionada ? 'Editar Publicación' : 'Crear Nueva Publicación'}
+              {seleccionado ? 'Editar Publicación' : 'Crear Nueva Publicación'}
             </div>
             <div className="card-body">
               <form onSubmit={handleSubmit}>
-                <h5 className="fw-bold mb-3" style={{ color: '#5d4037' }}>1. Datos de la Tarjeta (Feed)</h5>
+                <h5 className="fw-bold mb-3" style={{ color: '#5d4037' }}>1. Datos Principales y Vista Previa</h5>
+
+                {!seleccionado && (
+                  <div className="mb-3">
+                    <label className="form-label small fw-bold">RUT del Autor</label>
+                    <input
+                      type="text"
+                      value={formBlog.rutAutor}
+                      onChange={(e) => setFormBlog({ ...formBlog, rutAutor: e.target.value })}
+                      className="form-control border-secondary"
+                      placeholder="Ej: 12345678-9"
+                      required
+                    />
+                  </div>
+                )}
 
                 <div className="mb-3">
-                  <label className="form-label small fw-bold">Título de la Noticia</label>
+                  <label className="form-label small fw-bold">Título de la Publicación</label>
                   <input
                     type="text"
-                    value={tarjetaForm.titulo}
-                    onChange={handleTituloChange}
+                    value={formBlog.titulo}
+                    onChange={(e) => setFormBlog({ ...formBlog, titulo: e.target.value })}
                     className="form-control border-secondary"
                     placeholder="Ej: La vitrina de Carlos..."
+                    disabled={Boolean(seleccionado)}
                     required
                   />
                 </div>
 
-                <div className="row g-2 mb-3">
-                  <div className="col-12 col-md-6">
-                    <label className="form-label small fw-bold">Categoría</label>
-                    <select
-                      value={tarjetaForm.categoria}
-                      onChange={(e) => setTarjetaForm({ ...tarjetaForm, categoria: e.target.value })}
-                      className="form-select border-secondary"
-                    >
-                      <option value="Novedades">Novedades</option>
-                      <option value="Guías">Guías</option>
-                      <option value="Comunidad">Comunidad</option>
-                      <option value="Reseñas">Reseñas</option>
-                    </select>
-                  </div>
-                  <div className="col-12 col-md-6">
-                    <label className="form-label small fw-bold">Autor</label>
-                    <input
-                      type="text"
-                      value={tarjetaForm.autor}
-                      onChange={(e) => setTarjetaForm({ ...tarjetaForm, autor: e.target.value })}
-                      className="form-control border-secondary"
-                      required
-                    />
-                  </div>
-                </div>
-
                 <div className="mb-3">
-                  <label className="form-label small fw-bold" style={{ color: '#5d4037' }}>Imagen de Portada</label>
+                  <label className="form-label small fw-bold" style={{ color: '#5d4037' }}>Imagen de Portada (bloque "portada")</label>
                   <div 
                     onDragOver={(e) => { e.preventDefault(); setIsDragging(true) }}
                     onDragLeave={() => setIsDragging(false)}
@@ -385,7 +420,7 @@ function GestionNoticias() {
                         />
                         <div className="text-start">
                           <span className="small text-success fw-bold d-block">Imagen cargada correctamente</span>
-                          <span className="small text-muted">{tarjetaForm.imagenPortada}</span>
+                          <span className="small text-muted">{formBlog.imagenPortada}</span>
                         </div>
                       </div>
                     ) : (
@@ -397,31 +432,19 @@ function GestionNoticias() {
                 </div>
 
                 <div className="mb-3">
-                  <label className="form-label small fw-bold">Resumen corto</label>
+                  <label className="form-label small fw-bold">Resumen corto (bloque "resumen")</label>
                   <textarea
-                    value={tarjetaForm.resumen}
-                    onChange={(e) => setTarjetaForm({ ...tarjetaForm, resumen: e.target.value })}
+                    value={formBlog.resumen}
+                    onChange={(e) => setFormBlog({ ...formBlog, resumen: e.target.value })}
                     className="form-control border-secondary"
                     rows="2"
-                    placeholder="Breve vista previa para el listado..."
-                    required
+                    placeholder="Breve vista previa para la tarjeta..."
                   ></textarea>
                 </div>
 
                 <hr className="my-4" />
 
                 <h5 className="fw-bold mb-3" style={{ color: '#5d4037' }}>2. Cuerpo del Artículo</h5>
-
-                <div className="mb-3">
-                  <label className="form-label small fw-bold">Introducción</label>
-                  <textarea
-                    value={introduccion}
-                    onChange={(e) => setIntroduccion(e.target.value)}
-                    className="form-control border-secondary"
-                    rows="2"
-                    placeholder="Párrafo introductorio..."
-                  ></textarea>
-                </div>
 
                 <div className="mb-3">
                   <div className="d-flex justify-content-between align-items-center mb-2">
@@ -485,26 +508,16 @@ function GestionNoticias() {
                           placeholder={sec.tipo === 'parrafo' ? 'Escribe el párrafo...' : 'Escribe el subtítulo...'}
                         ></textarea>
                       )}
-
-                      {sec.tipo === 'imagen' && (
-                        <input
-                          type="text"
-                          value={sec.caption || ''}
-                          onChange={(e) => handleCambiarSeccion(idx, 'caption', e.target.value)}
-                          className="form-control form-control-sm border-secondary mt-1"
-                          placeholder="Pie de foto opcional..."
-                        />
-                      )}
                     </div>
                   ))}
                 </div>
 
                 <div className="d-grid gap-2 mt-4">
                   <button type="submit" className="btn text-white fw-bold py-2" style={{ backgroundColor: '#5d4037' }}>
-                    {seleccionada ? 'Guardar Cambios' : 'Publicar Noticia'}
+                    {seleccionado ? 'Guardar Cambios' : 'Publicar Blog'}
                   </button>
 
-                  {seleccionada && (
+                  {seleccionado && (
                     <>
                       <button type="button" className="btn btn-danger fw-bold py-2" onClick={handleEliminar}>
                         Eliminar Publicación

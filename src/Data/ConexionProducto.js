@@ -1,151 +1,144 @@
-// URL base de tu API desplegada en Render
-const API_URL = 'https://pruductos.onrender.com/api'; 
+import { DtoProducto, Categoria } from '../ContratosApis/ContratoProductos';
 
-/**
- * @typedef {Object} CreateProduct
- * @property {string} nombre
- * @property {number} precio
- * @property {number} stock
- * @property {string} categoria
- * @property {string} cBarras
- * @property {string|null} descripcion
- * @property {string} imagen
- */
+const API_URL = 'http://localhost:8080/api/v1';
 
-/**
- * @typedef {Object} UpdateProduct
- * @property {string} nombre
- * @property {number} precio
- * @property {number} stock
- * @property {string} categoria
- * @property {string} cBarras
- * @property {string|null} descripcion
- * @property {string} imagen
- */
+async function handleResponse(response) {
+    const contentType = response.headers.get('content-type');
+    const data = contentType && contentType.includes('application/json')
+        ? await response.json()
+        : await response.text();
 
-/**
- * @typedef {Object} categoria
- * @property {string} nombre
- */
+    if (!response.ok) {
+        const detalles = data?.errors ? Object.values(data.errors).join(', ') : '';
+        const mensaje = data?.message || (typeof data === 'string' ? data : 'Error en la petición');
+        throw new Error(detalles ? `${mensaje}: ${detalles}` : mensaje);
+    }
 
+    return data;
+}
+
+// Normaliza datos antiguos de React (cBarras, imagen string) al formato DtoProductoEntrada
+function normalizarProducto(raw) {
+    const rutasImagen = Array.isArray(raw.path)
+        ? raw.path
+        : raw.imagen
+            ? [raw.imagen]
+            : raw.imagenPath
+                ? [raw.imagenPath]
+                : [];
+
+    return new DtoProducto({
+        nombre: raw.nombre,
+        codigoBarras: raw.codigoBarras || raw.cBarras || raw.Cbarras || '',
+        precio: raw.precio,
+        oferta: raw.oferta ?? 0, // Evita fallo por @Min(500) o nullable=false en BD
+        Stok: raw.Stok ?? raw.stock,
+        path: rutasImagen,
+        Categoria: raw.Categoria || raw.categoria || ''
+    });
+}
 
 export const productApi = {
-    // 1. Obtener todos los productos -> GET /productos
+    // ==================== ENDPOINTS DE PRODUCTOS ====================
+
+    // 1. Obtener todos los productos -> GET /api/v1/productos
+    /** @returns {Promise<DtoProducto[]>} */
     async getProducts() {
-        const response = await fetch(`${API_URL}/productos`);
-        const json = await response.json();
-        if (!json.success) throw new Error("Error al obtener los productos");
-        return json.data;
+        const data = await handleResponse(await fetch(`${API_URL}/productos`));
+        return data.map(item => new DtoProducto(item));
     },
 
-    // 2. Obtener todas las categorías -> GET /categorias
-    async getCategories() {
-        const response = await fetch(`${API_URL}/categorias`);
-        const json = await response.json();
-        if (!json.success) throw new Error("Error al obtener las categorías");
-        return json.data;
+    // 2. Obtener productos por categoría -> GET /api/v1/productos/categoria/{categoria}
+    /** @returns {Promise<DtoProducto[]>} */
+    async getProductsByCategory(categoria) {
+        const data = await handleResponse(
+            await fetch(`${API_URL}/productos/categoria/${encodeURIComponent(categoria)}`)
+        );
+        return data.map(item => new DtoProducto(item));
     },
 
-    // 3. Crear Producto -> POST /productos
-    /** @param {CreateProduct} productData */
+    // 3. Crear Producto -> POST /api/v1/productos
+    /** @returns {Promise<DtoProducto>} */
     async createProduct(productData) {
+        const contrato = normalizarProducto(productData);
         const response = await fetch(`${API_URL}/productos`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(productData),
+            body: JSON.stringify(contrato),
         });
-        const json = await response.json();
-        if (!json.success) throw new Error(json.message || "Error al crear el producto");
-        return json.data;
+        const data = await handleResponse(response);
+        return new DtoProducto(data);
     },
 
-    // 4. Actualizar Producto -> PUT /productos
-    /** @param {UpdateProduct} productData */
+    // 4. Actualizar Producto -> PUT /api/v1/productos
+    /** @returns {Promise<DtoProducto>} */
     async updateProduct(productData) {
+        const contrato = normalizarProducto(productData);
         const response = await fetch(`${API_URL}/productos`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(productData),
+            body: JSON.stringify(contrato),
         });
-        const json = await response.json();
-        if (!json.success) throw new Error(json.message || "Error al actualizar el producto");
-        return json.data;
+        const data = await handleResponse(response);
+        return new DtoProducto(data);
     },
 
-    // 5. Eliminar Producto -> DELETE /productos
+    // 5. Eliminar Producto -> DELETE /api/v1/productos
     async deleteProduct(productData) {
+        const contrato = normalizarProducto(productData);
         const response = await fetch(`${API_URL}/productos`, {
             method: 'DELETE',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(productData),
+            body: JSON.stringify(contrato),
         });
-        const json = await response.json();
-        if (!json.success) throw new Error(json.message || "Error al eliminar el producto");
-        return json.data;
+        return handleResponse(response); // Devuelve el String de confirmación
     },
 
-  // Crear Categoría -> POST /categorias
-async createCategory(nombreCategoria) {
-    const response = await fetch(`${API_URL}/categorias`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        // Enviar 'cnombre' tal como lo exige el DTO 'categoriaC_U' del backend
-        body: JSON.stringify({ cnombre: nombreCategoria }),
-    });
-    const json = await response.json();
-    if (!json.success) throw new Error(json.message || "Error al crear la categoría");
-    return json.data;
-},
+    // ==================== ENDPOINTS DE CATEGORÍAS ====================
 
-// Eliminar Categoría -> DELETE /categorias
-async deleteCategory(nombreCategoria) {
-    const response = await fetch(`${API_URL}/categorias`, {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cnombre: nombreCategoria }),
-    });
-    const json = await response.json();
-    if (!json.success) throw new Error(json.message || "Error al eliminar la categoría");
-    return json.data;
-},
+    // 6. Obtener todas las categorías -> GET /api/v1/categorias
+    /** @returns {Promise<Categoria[]>} */
+    async getCategories() {
+        const data = await handleResponse(await fetch(`${API_URL}/categorias`));
+        return data.map(item => new Categoria(typeof item === 'string' ? { nombre: item } : item));
+    },
 
-// Actualizar Categoría -> PUT /categorias/:anterior
-async updateCategory(nombreAnterior, nuevoNombre) {
-    const response = await fetch(`${API_URL}/categorias/${encodeURIComponent(nombreAnterior)}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cnombre: nuevoNombre }),
-    });
-    const json = await response.json();
-    if (!json.success) throw new Error(json.message || "Error al actualizar la categoría");
-    return json.data;
-},
-// Actualizar stock tras compra usando el método PUT general de tu API
-  async actualizarStockDespuesDeCompra(itemsCarrito) {
-    try {
-      for (const item of itemsCarrito) {
-        const stockActual = Number(item.stock) || 0
-        const cantidadComprada = Number(item.cantidad) || 0
-        const nuevoStock = Math.max(0, stockActual - cantidadComprada)
+    // 7. Buscar categoría por nombre -> GET /api/v1/categorias/{nombre}
+    /** @returns {Promise<Categoria>} */
+    async getCategoryByName(nombre) {
+        const data = await handleResponse(
+            await fetch(`${API_URL}/categorias/${encodeURIComponent(nombre)}`)
+        );
+        return new Categoria(data);
+    },
 
-        // Preparamos el objeto completo tal como lo exige tu DTO y la función updateProduct
-        const productoActualizado = {
-          nombre: item.nombre,
-          precio: Number(item.precio),
-          stock: nuevoStock,
-          categoria: item.categoria,
-          cBarras: item.cBarras || item.Cbarras || item.codigoBarras,
-          descripcion: item.descripcion || '',
-          imagen: item.imagen || item.imagenPath || ''
-        }
+    // 8. Crear Categoría -> POST /api/v1/categorias
+    async createCategory(nombreCategoria) {
+        const contrato = new Categoria({ nombre: nombreCategoria });
+        const response = await fetch(`${API_URL}/categorias`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(contrato),
+        });
+        return handleResponse(response); // Devuelve String
+    },
 
-        // Llamamos a tu función updateProduct existente
-        await this.updateProduct(productoActualizado)
-      }
-      return true
-    } catch (error) {
-      console.error('Error al actualizar el stock tras la compra:', error)
-      return false
+    // 9. Actualizar Categoría -> PUT /api/v1/categorias/{viejo}
+    async updateCategory(nombreAnterior, nuevoNombre) {
+        const contrato = new Categoria({ nombre: nuevoNombre });
+        const response = await fetch(`${API_URL}/categorias/${encodeURIComponent(nombreAnterior)}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(contrato),
+        });
+        return handleResponse(response);
+    },
+
+    // 10. Eliminar Categoría -> DELETE /api/v1/categorias/{nombre}
+    async deleteCategory(nombreCategoria) {
+        const response = await fetch(`${API_URL}/categorias/${encodeURIComponent(nombreCategoria)}`, {
+            method: 'DELETE',
+        });
+        return handleResponse(response); // Devuelve String
     }
-  }
 }

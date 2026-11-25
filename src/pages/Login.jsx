@@ -1,7 +1,17 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
+import { GoogleLogin } from '@react-oauth/google'
+import { jwtDecode } from 'jwt-decode'
 import { userApi } from '../Data/ConexionUser'
-import { documentoApi } from '../Data/ConexionBoletas'
+import { boletaApi } from '../Data/ConexionBoletas'
+import { DtoBoletas, DtoDetalleBoleta } from '../ContratosApis/ContratoBoleta'
+
+function obtenerNombreMostrar(usuario) {
+    if (!usuario) return 'Usuario'
+    if (usuario.nombreCompleto) return usuario.nombreCompleto
+    const combinado = [usuario.nombre, usuario.apellido].filter(Boolean).join(' ').trim()
+    return combinado || usuario.correo || 'Usuario'
+}
 
 function Login({ onLogin }) {
     const navigate = useNavigate()
@@ -16,39 +26,34 @@ function Login({ onLogin }) {
     const [errors, setErrors] = useState({})
     const [mensajeExito, setMensajeExito] = useState(false)
 
-    // Al cargar el componente, traemos el usuario fresco de PostgreSQL y las boletas de MongoDB
     useEffect(() => {
         const cargarDatosUsuario = async () => {
             try {
                 const guardado = localStorage.getItem('usuarioLogueado')
-                if (guardado) {
-                    const usuarioLocal = JSON.parse(guardado)
-                    const email = usuarioLocal.email || usuarioLocal.correo
+                if (!guardado) return
 
-                    if (email) {
-                        setCargandoHistorial(true)
-                        
-                        // 1. Obtenemos el usuario fresco desde PostgreSQL
-                        const usuarioFresquito = await userApi.getUserByEmail(email)
-                        setUsuarioActual(usuarioFresquito)
-                        localStorage.setItem('usuarioLogueado', JSON.stringify(usuarioFresquito))
+                const usuarioLocal = JSON.parse(guardado)
+                if (!usuarioLocal || typeof usuarioLocal !== 'object') return
 
-                        // 2. Traemos TODAS las boletas/documentos de MongoDB (al igual que en BoletasAdmind)
-                        const todasLasBoletas = await documentoApi.listarDocumentos()
-                        
-                        // 3. Filtramos solo aquellas boletas cuyos tickets pertenezcan al historial del usuario
-                        const ticketsUsuario = usuarioFresquito.historialCompras || []
-                        
-                        const boletasDelUsuario = todasLasBoletas.filter(doc => {
-                            const ticketDoc = doc.tikect || doc._id
-                            return ticketsUsuario.includes(ticketDoc)
-                        })
+                setUsuarioActual(usuarioLocal)
 
-                        setHistorialDetallado(boletasDelUsuario)
-                    }
+                const correoUsuario = String(usuarioLocal.correo || usuarioLocal.email || '').trim()
+                if (!correoUsuario) {
+                    setHistorialDetallado([])
+                    return
                 }
+
+                setCargandoHistorial(true)
+                const boletasDelUsuario = await boletaApi.getBoletasByUsuario(correoUsuario)
+
+                const boletasContrato = Array.isArray(boletasDelUsuario)
+                    ? boletasDelUsuario.map((b) => (b instanceof DtoBoletas ? b : new DtoBoletas(b)))
+                    : []
+
+                setHistorialDetallado(boletasContrato)
             } catch (e) {
                 console.error("Error al sincronizar el usuario o las boletas:", e)
+                setHistorialDetallado([])
             } finally {
                 setCargandoHistorial(false)
             }
@@ -56,6 +61,28 @@ function Login({ onLogin }) {
 
         cargarDatosUsuario()
     }, [])
+
+    const completarLogin = (usuario) => {
+        const esAdmin = (usuario.rol || '').toLowerCase() === 'administrador'
+
+        setMensajeExito(true)
+        setErrors({})
+
+        localStorage.setItem('usuarioLogueado', JSON.stringify(usuario))
+        setUsuarioActual(usuario)
+
+        if (onLogin) {
+            onLogin(usuario)
+        }
+
+        setTimeout(() => {
+            if (esAdmin) {
+                navigate('/admin')
+            } else {
+                navigate('/')
+            }
+        }, 1500)
+    }
 
     const handleChange = (e) => {
         setFormData({
@@ -82,38 +109,51 @@ function Login({ onLogin }) {
         }
 
         try {
-            const resultado = await userApi.login(formData.correo, formData.password)
-            const usuarrio = await userApi.getUserByEmail(formData.correo)
-            
-            if (resultado) {
-                const esAdmin = usuarrio.rol === 'administrador'
+            const usuario = await userApi.login(formData.correo, formData.password)
 
-                setMensajeExito(true)
-                setErrors({})
-                
-                localStorage.setItem('usuarioLogueado', JSON.stringify(usuarrio))
-                setUsuarioActual(usuarrio)
-
-                if (onLogin) {
-                    onLogin(usuarrio)
-                }
-                
-                setTimeout(() => {
-                    if (esAdmin) {
-                        navigate('/admin')
-                    } else {
-                        navigate('/')
-                    }
-                }, 1500)
+            if (usuario) {
+                completarLogin(usuario)
             } else {
                 setErrors({ correo: 'Correo o contraseña incorrectos.' })
                 setMensajeExito(false)
             }
         } catch (error) {
             console.error("Error en el login:", error)
-            setErrors({ correo: 'Correo o contraseña incorrectos, o el usuario no está registrado.' })
+            setErrors({ correo: error.message || 'Correo o contraseña incorrectos, o el usuario no está registrado.' })
             setMensajeExito(false)
         }
+    }
+
+    const handleGoogleSuccess = async (credentialResponse) => {
+        try {
+            if (!credentialResponse?.credential) {
+                throw new Error('Google no devolvió un token válido.')
+            }
+
+            const decoded = jwtDecode(credentialResponse.credential)
+            if (!decoded?.email || !decoded?.sub) {
+                throw new Error('No se pudo leer el correo o el identificador (sub) de Google.')
+            }
+
+            // Usa correo + sub (como contraseña); si aún no existe, lo crea con userApi.createUserWithGoogle
+            const usuario = await userApi.autenticarConGoogle(decoded)
+
+            if (usuario) {
+                completarLogin(usuario)
+            } else {
+                setErrors({ correo: 'No se pudo iniciar sesión con Google.' })
+                setMensajeExito(false)
+            }
+        } catch (error) {
+            console.error("Error en login con Google:", error)
+            setErrors({ correo: error.message || 'Error al autenticar con Google.' })
+            setMensajeExito(false)
+        }
+    }
+
+    const handleGoogleError = () => {
+        setErrors({ correo: 'El inicio de sesión con Google fue cancelado o falló.' })
+        setMensajeExito(false)
     }
 
     const handleCerrarSesion = () => {
@@ -126,15 +166,11 @@ function Login({ onLogin }) {
         navigate('/Login')
     }
 
-    // Formateador de moneda chilena
     const formatear = (valor) => {
         return new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP' }).format(valor || 0)
     }
 
-    // SI YA HAY UN USUARIO LOGUEADO, MOSTRAMOS SU PANEL Y EL ACORDEÓN CON LAS BOLETAS REALES
     if (usuarioActual) {
-        const listaTickets = usuarioActual.historialCompras || []
-
         return (
             <div className="container py-5">
                 <div className="row justify-content-center">
@@ -142,10 +178,14 @@ function Login({ onLogin }) {
                         <div className="card shadow-lg border-secondary p-4" style={{ backgroundColor: '#fce4ec' }}>
                             <div className="d-flex align-items-center mb-4 border-bottom pb-3 border-secondary-subtle">
                                 <div>
-                                    <h3 className="text-dark fw-bold mb-1">¡Hola, {usuarioActual.nombre || 'Usuario'}!</h3>
-                                    <p className="text-muted mb-0 small">Sesión activa: {usuarioActual.email || usuarioActual.correo}</p>
+                                    <h3 className="text-dark fw-bold mb-1">
+                                        ¡Hola, {obtenerNombreMostrar(usuarioActual)}!
+                                    </h3>
+                                    <p className="text-muted mb-0 small">
+                                        Sesión activa: {usuarioActual.correo} {usuarioActual.rut ? `| RUT: ${usuarioActual.rut}` : ''}
+                                    </p>
                                 </div>
-                                <button 
+                                <button
                                     onClick={handleCerrarSesion}
                                     className="btn btn-danger fw-bold ms-auto px-4 py-2"
                                 >
@@ -154,7 +194,7 @@ function Login({ onLogin }) {
                             </div>
 
                             <h5 className="fw-bold text-dark mb-3">🛍️ Tus Boletas e Historial de Compras</h5>
-                            
+
                             {cargandoHistorial ? (
                                 <div className="text-center py-4">
                                     <div className="spinner-border text-dark" role="status">
@@ -162,39 +202,40 @@ function Login({ onLogin }) {
                                     </div>
                                     <p className="small text-muted mt-2">Buscando tus boletas en el sistema...</p>
                                 </div>
-                            ) : listaTickets.length > 0 ? (
+                            ) : historialDetallado.length > 0 ? (
                                 <div className="accordion shadow-sm" id="accordionHistorial">
-                                    {listaTickets.map((idTicket, index) => {
-                                        // Buscamos la coincidencia exacta dentro de las boletas traídas de MongoDB
-                                        const boletaMatcheada = historialDetallado.find(
-                                            b => (b.tikect && b.tikect === idTicket) || (b._id && b._id === idTicket)
-                                        )
-
-                                        const productos = boletaMatcheada?.productos || []
-                                        const totalCompra = boletaMatcheada?.total || 0
+                                    {historialDetallado.map((boleta, index) => {
+                                        const contratoBoleta = boleta instanceof DtoBoletas ? boleta : new DtoBoletas(boleta)
+                                        const idBoleta = contratoBoleta.id ?? index + 1
+                                        const productos = Array.isArray(contratoBoleta.productos) ? contratoBoleta.productos : []
+                                        const totalCompra = contratoBoleta.total ?? 0
+                                        const fechaTexto = contratoBoleta.fechaFormateada
 
                                         return (
-                                            <div className="accordion-item border-secondary mb-2" key={index}>
+                                            <div className="accordion-item border-secondary mb-2" key={idBoleta}>
                                                 <h2 className="accordion-header" id={`heading-${index}`}>
-                                                    <button 
-                                                        className="accordion-button collapsed fw-bold text-dark" 
-                                                        type="button" 
-                                                        data-bs-toggle="collapse" 
-                                                        data-bs-target={`#collapse-${index}`} 
-                                                        aria-expanded="false" 
+                                                    <button
+                                                        className="accordion-button collapsed fw-bold text-dark"
+                                                        type="button"
+                                                        data-bs-toggle="collapse"
+                                                        data-bs-target={`#collapse-${index}`}
+                                                        aria-expanded="false"
                                                         aria-controls={`collapse-${index}`}
                                                         style={{ backgroundColor: '#fff0f3' }}
                                                     >
                                                         <div className="d-flex justify-content-between w-100 pe-3 align-items-center">
-                                                            <span>🎫 Ticket N°: <span className="text-primary">{idTicket}</span></span>
+                                                            <span>
+                                                                🎫 Boleta N°: <span className="text-primary">{idBoleta}</span>
+                                                                {fechaTexto && <small className="text-muted ms-2 fw-normal">({fechaTexto})</small>}
+                                                            </span>
                                                             <span className="badge bg-dark text-white px-3 py-2">Total: {formatear(totalCompra)}</span>
                                                         </div>
                                                     </button>
                                                 </h2>
-                                                <div 
-                                                    id={`collapse-${index}`} 
-                                                    className="accordion-collapse collapse" 
-                                                    aria-labelledby={`heading-${index}`} 
+                                                <div
+                                                    id={`collapse-${index}`}
+                                                    className="accordion-collapse collapse"
+                                                    aria-labelledby={`heading-${index}`}
                                                     data-bs-parent="#accordionHistorial"
                                                 >
                                                     <div className="accordion-body bg-white">
@@ -205,22 +246,23 @@ function Login({ onLogin }) {
                                                                     <thead className="table-light">
                                                                         <tr>
                                                                             <th>Producto</th>
-                                                                            <th>Categoría</th>
                                                                             <th className="text-center">Cantidad</th>
                                                                             <th className="text-end">Precio Unit.</th>
-                                                                            <th className="text-end">total</th>
+                                                                            <th className="text-end">Subtotal</th>
                                                                         </tr>
                                                                     </thead>
                                                                     <tbody>
-                                                                        {productos.map((prod, pIndex) => (
-                                                                            <tr key={pIndex}>
-                                                                                <td className="fw-semibold">{prod.nombre}</td>
-                                                                                <td><span className="badge bg-secondary">{prod.categoria}</span></td>
-                                                                                <td className="text-center">{prod.cantidad}</td>
-                                                                                <td className="text-end">{formatear(prod.precioU)}</td>
-                                                                                <td className="text-end fw-bold">{formatear(prod.cantidad * prod.precioU)}</td>
-                                                                            </tr>
-                                                                        ))}
+                                                                        {productos.map((prod, pIndex) => {
+                                                                            const detalle = prod instanceof DtoDetalleBoleta ? prod : new DtoDetalleBoleta(prod)
+                                                                            return (
+                                                                                <tr key={pIndex}>
+                                                                                    <td className="fw-semibold">{detalle.nombreProducto || '—'}</td>
+                                                                                    <td className="text-center">{detalle.cantidad}</td>
+                                                                                    <td className="text-end">{formatear(detalle.precioUnitario)}</td>
+                                                                                    <td className="text-end fw-bold">{formatear(detalle.subtotal)}</td>
+                                                                                </tr>
+                                                                            )
+                                                                        })}
                                                                     </tbody>
                                                                 </table>
                                                             </div>
@@ -245,8 +287,8 @@ function Login({ onLogin }) {
                             )}
 
                             <div className="text-center mt-4">
-                                <button 
-                                    onClick={() => navigate('/')} 
+                                <button
+                                    onClick={() => navigate('/')}
                                     className="btn text-white fw-bold px-4 py-2"
                                     style={{ backgroundColor: '#5d4037' }}
                                 >
@@ -260,25 +302,24 @@ function Login({ onLogin }) {
         )
     }
 
-    // SI NO ESTÁ LOGUEADO, MOSTRAMOS EL FORMULARIO NORMAL
     return (
         <div className="container py-5">
             <div className="row justify-content-center">
                 <div className="col-12 col-md-8 col-lg-6 text-center">
-                    
+
                     <div className="mb-3 d-flex justify-content-center">
-                        <img 
+                        <img
                             src="/img/logoPAGINA.jpg"
                             alt="Logo AnimeWord"
                             className="rounded-circle shadow-sm"
                             style={{ width: '90px', height: '90px', objectFit: 'cover' }}
                         />
                     </div>
-                    
+
                     <h3 className="text-dark fw-bold mb-4">AnimeWord</h3>
 
                     <div className="card shadow-lg border-secondary text-start" style={{ backgroundColor: '#fce4ec' }}>
-                        
+
                         <div className="card-header text-white fw-bold border-secondary py-2 text-uppercase" style={{ backgroundColor: '#5d4037' }}>
                             inicio de sesión
                         </div>
@@ -291,11 +332,11 @@ function Login({ onLogin }) {
                             )}
 
                             <form onSubmit={handleSubmit} noValidate>
-                                
+
                                 <div className="mb-3">
                                     <label className="form-label text-uppercase small fw-bold" style={{ color: '#5d4037' }}>Correo</label>
-                                    <input 
-                                        type="email" 
+                                    <input
+                                        type="email"
                                         name="correo"
                                         value={formData.correo}
                                         onChange={handleChange}
@@ -307,8 +348,8 @@ function Login({ onLogin }) {
 
                                 <div className="mb-4">
                                     <label className="form-label text-uppercase small fw-bold" style={{ color: '#5d4037' }}>Contraseña</label>
-                                    <input 
-                                        type="password" 
+                                    <input
+                                        type="password"
                                         name="password"
                                         value={formData.password}
                                         onChange={handleChange}
@@ -319,13 +360,30 @@ function Login({ onLogin }) {
                                 </div>
 
                                 <div className="d-flex justify-content-center mb-3">
-                                    <button 
-                                        type="submit" 
-                                        className="btn text-white fw-bold px-5 py-2 w-50" 
+                                    <button
+                                        type="submit"
+                                        className="btn text-white fw-bold px-5 py-2 w-50"
                                         style={{ backgroundColor: '#5d4037', border: '1px solid #fce4ec' }}
                                     >
                                         Iniciar sesión
                                     </button>
+                                </div>
+
+                                <div className="d-flex align-items-center my-3">
+                                    <hr className="flex-grow-1 my-0" />
+                                    <span className="px-2 small text-muted fw-semibold">O</span>
+                                    <hr className="flex-grow-1 my-0" />
+                                </div>
+
+                                <div className="d-flex justify-content-center mb-2">
+                                    <GoogleLogin
+                                        onSuccess={handleGoogleSuccess}
+                                        onError={handleGoogleError}
+                                        theme="outline"
+                                        size="large"
+                                        text="signin_with"
+                                        shape="rectangular"
+                                    />
                                 </div>
 
                                 <div className="text-center mt-4 border-top pt-3 border-secondary-subtle">

@@ -5,39 +5,54 @@ import { useNavigate } from 'react-router-dom'
 function AdminUser() {
   const navigate = useNavigate()
   const [usuarios, setUsuarios] = useState([])
+  const [rolesDisponibles, setRolesDisponibles] = useState([])
   const [seleccionado, setSeleccionado] = useState(null)
 
-  // Formulario estructurado según DTO de usuario
   const [formData, setFormData] = useState({
     nombre: '',
     apellido: '',
-    rol: 'cliente',
-    email: '',
-    paswword: ''
+    rut: '',
+    rol: 'usuario',
+    correo: '',
+    password: ''
   })
 
-  // Función para obtener la lista fresca desde la API
-  const cargarUsuarios = async () => {
+  // Divide "Jhonfran Pardo Blas" -> { nombre: "Jhonfran", apellido: "Pardo Blas" }
+  const dividirNombreCompleto = (nombreCompleto = '') => {
+    const partes = nombreCompleto.trim().split(/\s+/)
+    const nombre = partes[0] || ''
+    const apellido = partes.slice(1).join(' ') || ''
+    return { nombre, apellido }
+  }
+
+  const cargarDatos = async () => {
     try {
-      const datos = await userApi.getUsers()
-      setUsuarios(datos)
+      const [datosUsuarios, datosRoles] = await Promise.all([
+        userApi.getUsers(),
+        userApi.getRoles()
+      ])
+      setUsuarios(datosUsuarios)
+      setRolesDisponibles(datosRoles)
     } catch (error) {
-      console.error('Error al cargar usuarios:', error)
+      console.error('Error al cargar datos:', error)
     }
   }
 
   useEffect(() => {
-    cargarUsuarios()
+    cargarDatos()
   }, [])
 
   const handleSelectRow = (usuario) => {
     setSeleccionado(usuario)
+    const { nombre, apellido } = dividirNombreCompleto(usuario.nombreCompleto)
+
     setFormData({
-      nombre: usuario.nombre || '',
-      apellido: usuario.apellido || '',
-      rol: usuario.rol || 'cliente',
-      email: usuario.email || '',
-      paswword: usuario.paswword || ''
+      nombre,
+      apellido,
+      rut: usuario.rut || '',
+      rol: usuario.rol || 'usuario',
+      correo: usuario.correo || '',
+      password: '' // El backend no devuelve la contraseña
     })
   }
 
@@ -46,9 +61,10 @@ function AdminUser() {
     setFormData({
       nombre: '',
       apellido: '',
-      rol: 'cliente',
-      email: '',
-      paswword: ''
+      rut: '',
+      rol: rolesDisponibles[0]?.nombre || 'usuario',
+      correo: '',
+      password: ''
     })
   }
 
@@ -62,27 +78,28 @@ function AdminUser() {
   const handleSubmit = async (e) => {
     e.preventDefault()
 
-    if (!seleccionado && formData.paswword.length < 10) {
-      alert('La contraseña debe tener al menos 10 caracteres.')
+    // Al crear la contraseña es obligatoria; al editar es opcional (vacía = se conserva)
+    if (!seleccionado && formData.password.length < 6) {
+      alert('La contraseña debe tener al menos 6 caracteres.')
+      return
+    }
+    if (seleccionado && formData.password && formData.password.length < 6) {
+      alert('La nueva contraseña debe tener al menos 6 caracteres.')
       return
     }
 
     try {
       if (seleccionado) {
-        await userApi.updateUser({
-          ...formData,
-          historialCompras: seleccionado.historialCompras || []
-        })
+        // Correo ACTUAL = el del usuario seleccionado en la tabla.
+        // Solo se envían los campos con valor; el resto se conserva en el backend.
+        await userApi.updateUserAdmin(seleccionado.correo, formData)
         alert('¡Usuario modificado con éxito!')
       } else {
-        await userApi.createUser({
-          ...formData,
-          historialCompras: []
-        })
+        await userApi.createUser(formData)
         alert('¡Usuario creado con éxito!')
       }
 
-      await cargarUsuarios()
+      await cargarDatos()
       handleLimpiar()
     } catch (error) {
       console.error('Error al guardar el usuario:', error)
@@ -94,14 +111,15 @@ function AdminUser() {
     if (!seleccionado) return
 
     const confirmar = window.confirm(
-      `¿Estás seguro de que deseas eliminar al usuario ${seleccionado.nombre}?`
+      `¿Estás seguro de que deseas eliminar al usuario ${seleccionado.nombreCompleto}?`
     )
 
     if (confirmar) {
       try {
-        await userApi.deleteUser(seleccionado)
+        // Se usa el correo del seleccionado, no el del formulario (que pudo editarse)
+        await userApi.deleteUser({ correo: seleccionado.correo })
         alert('¡Usuario eliminado con éxito!')
-        await cargarUsuarios()
+        await cargarDatos()
         handleLimpiar()
       } catch (error) {
         console.error('Error al eliminar usuario:', error)
@@ -109,10 +127,6 @@ function AdminUser() {
       }
     }
   }
-
-  const cantidadBoletas = seleccionado && Array.isArray(seleccionado.historialCompras) 
-    ? seleccionado.historialCompras.length 
-    : 0
 
   return (
     <div className="w-100 pb-5 overflow-hidden">
@@ -142,7 +156,8 @@ function AdminUser() {
                 <table className="table table-hover mb-0 align-middle">
                   <thead className="table-light">
                     <tr>
-                      <th>Nombre</th>
+                      <th>Nombre Completo</th>
+                      <th>RUT</th>
                       <th>Correo</th>
                       <th>Rol</th>
                     </tr>
@@ -150,26 +165,27 @@ function AdminUser() {
                   <tbody>
                     {usuarios && usuarios.length > 0 ? (
                       usuarios.map((usu, index) => (
-                        <tr 
-                          key={usu.email || index} 
+                        <tr
+                          key={usu.correo || index}
                           onClick={() => handleSelectRow(usu)}
-                          style={{ 
-                            cursor: 'pointer', 
-                            backgroundColor: seleccionado?.email === usu.email ? '#fce4ec' : 'transparent' 
+                          style={{
+                            cursor: 'pointer',
+                            backgroundColor: seleccionado?.correo === usu.correo ? '#fce4ec' : 'transparent'
                           }}
                         >
-                          <td className="fw-bold">{usu.nombre} {usu.apellido || ''}</td>
-                          <td className="text-break">{usu.email}</td>
+                          <td className="fw-bold">{usu.nombreCompleto}</td>
+                          <td>{usu.rut || '—'}</td>
+                          <td className="text-break">{usu.correo}</td>
                           <td>
-                            <span className={`badge ${usu.rol === 'administrador' ? 'bg-danger' : 'bg-secondary'}`}>
-                              {usu.rol || 'cliente'}
+                            <span className={`badge ${usu.rol?.toLowerCase() === 'administrador' ? 'bg-danger' : 'bg-secondary'}`}>
+                              {usu.rol}
                             </span>
                           </td>
                         </tr>
                       ))
                     ) : (
                       <tr>
-                        <td colSpan="3" className="text-center py-4 text-muted">
+                        <td colSpan="4" className="text-center py-4 text-muted">
                           No hay usuarios registrados.
                         </td>
                       </tr>
@@ -181,96 +197,114 @@ function AdminUser() {
           </div>
         </div>
 
-        {/* COLUMNA DERECHA: Formulario DTO */}
+        {/* COLUMNA DERECHA: Formulario */}
         <div className="col-12 col-lg-5">
           <div className="card shadow-sm border-0" style={{ backgroundColor: '#fce4ec' }}>
             <div className="card-header text-white fw-bold py-2 text-uppercase d-flex justify-content-between align-items-center" style={{ backgroundColor: '#5d4037' }}>
-              <span>{seleccionado ? 'Modificar Usuario' : 'Nuevo Usuario'}</span>
-              {seleccionado && (
-                <span className="badge bg-light text-dark">
-                  Boletas: {cantidadBoletas}
-                </span>
-              )}
+              <span>{seleccionado ? `Modificar: ${seleccionado.correo}` : 'Nuevo Usuario'}</span>
             </div>
             <div className="card-body">
               <form onSubmit={handleSubmit}>
-                
+
                 {seleccionado && (
-                  <div className="alert alert-secondary py-2 small mb-3">
-                    📄 Este usuario tiene <strong>{cantidadBoletas}</strong> boleta(s) registrada(s) a su nombre en el historial.
+                  <div className="alert alert-info py-2 small">
+                    Solo se actualizan los campos que tengan valor. Los vacíos conservan su dato actual.
                   </div>
                 )}
 
                 <div className="mb-3">
+                  <label className="form-label small fw-bold text-dark">RUT (opcional)</label>
+                  <input
+                    type="text"
+                    name="rut"
+                    value={formData.rut}
+                    onChange={handleChange}
+                    className="form-control"
+                    placeholder="12345678-9"
+                  />
+                </div>
+
+                <div className="mb-3">
                   <label className="form-label small fw-bold text-dark">Nombre</label>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     name="nombre"
                     value={formData.nombre}
                     onChange={handleChange}
                     className="form-control"
                     placeholder="Ingresa el nombre"
-                    required
+                    required={!seleccionado}
                   />
                 </div>
 
                 <div className="mb-3">
                   <label className="form-label small fw-bold text-dark">Apellido</label>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     name="apellido"
                     value={formData.apellido}
                     onChange={handleChange}
                     className="form-control"
                     placeholder="Ingresa el apellido"
+                    required={!seleccionado}
                   />
                 </div>
 
                 <div className="mb-3">
                   <label className="form-label small fw-bold text-dark">Rol del Usuario</label>
-                  <select 
+                  <select
                     name="rol"
                     value={formData.rol}
                     onChange={handleChange}
                     className="form-select border-secondary w-100"
                     style={{ maxWidth: '100%', boxSizing: 'border-box' }}
                   >
-                    <option value="cliente">cliente</option>
-                    <option value="administrador">administrador</option>
+                    {rolesDisponibles.length > 0 ? (
+                      rolesDisponibles.map((r, idx) => (
+                        <option key={idx} value={r.nombre}>
+                          {r.nombre}
+                        </option>
+                      ))
+                    ) : (
+                      <>
+                        <option value="usuario">usuario</option>
+                        <option value="administrador">administrador</option>
+                      </>
+                    )}
                   </select>
                 </div>
 
                 <div className="mb-3">
-                  <label className="form-label small fw-bold text-dark">Correo Electrónico (email)</label>
-                  <input 
-                    type="email" 
-                    name="email"
-                    value={formData.email}
+                  <label className="form-label small fw-bold text-dark">Correo Electrónico</label>
+                  <input
+                    type="email"
+                    name="correo"
+                    value={formData.correo}
                     onChange={handleChange}
                     className="form-control"
                     placeholder="usuario@correo.com"
-                    disabled={Boolean(seleccionado)}
-                    required
+                    required={!seleccionado}
                   />
                 </div>
 
                 <div className="mb-3">
-                  <label className="form-label small fw-bold text-dark">Contraseña (Mínimo 10 caracteres)</label>
-                  <input 
-                    type="password" 
-                    name="paswword"
-                    value={formData.paswword}
+                  <label className="form-label small fw-bold text-dark">
+                    {seleccionado ? 'Nueva contraseña (dejar vacío para no cambiarla)' : 'Contraseña'}
+                  </label>
+                  <input
+                    type="password"
+                    name="password"
+                    value={formData.password}
                     onChange={handleChange}
                     className="form-control"
-                    placeholder="Mínimo 10 caracteres"
-                    minLength={10}
+                    placeholder={seleccionado ? 'Sin cambios' : 'Mínimo 6 caracteres'}
                     required={!seleccionado}
                   />
                 </div>
 
                 <div className="d-grid gap-2 mt-4">
-                  <button 
-                    type="submit" 
+                  <button
+                    type="submit"
                     className="btn text-white fw-bold py-2"
                     style={{ backgroundColor: '#5d4037' }}
                   >
@@ -279,16 +313,16 @@ function AdminUser() {
 
                   {seleccionado && (
                     <>
-                      <button 
-                        type="button" 
+                      <button
+                        type="button"
                         className="btn btn-danger fw-bold py-2"
                         onClick={handleEliminar}
                       >
                         Eliminar Perfil
                       </button>
 
-                      <button 
-                        type="button" 
+                      <button
+                        type="button"
                         className="btn btn-outline-secondary btn-sm mt-1"
                         onClick={handleLimpiar}
                       >

@@ -1,8 +1,17 @@
 export const formatear = (n) => `$ ${Number(n).toLocaleString('es-CL')}`
 
-// Asegura que la ruta de la imagen sea absoluta: "img/x.jpg" -> "/img/x.jpg"
-const rutaImagen = (ruta = '') =>
-  ruta.startsWith('/') || ruta.startsWith('http') ? ruta : `/${ruta}`
+// Extrae la ruta ya sea desde item.imagen o item.path (array o string) y la normaliza
+const obtenerRutaImagen = (item) => {
+  const raw =
+    item?.imagen ||
+    (Array.isArray(item?.path) && item.path.length > 0 ? item.path[0] : item?.path) ||
+    ''
+
+  if (!raw || typeof raw !== 'string') return ''
+  const ruta = raw.startsWith('/') || raw.startsWith('http') ? raw : `/${raw}`
+  return ruta.toLowerCase()
+}
+
 
 // Tabla Imagen | Nombre | Precio | Cantidad | Subtotal
 // Si le pasas onEliminar, agrega una columna con botón "Eliminar" (solo para el carrito).
@@ -25,7 +34,7 @@ function TablaProductos({ items = [], onEliminar }) {
             <tr key={`${item.id}-${index}`}>
               <td>
                 <img
-                  src={rutaImagen(item.imagen)}
+                  src={obtenerRutaImagen(item)}
                   alt={item.nombre}
                   style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 8 }}
                 />

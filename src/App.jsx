@@ -1,8 +1,11 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { Routes, Route, useLocation, useNavigate, Navigate } from 'react-router-dom'
 import './index.css'
 import 'bootstrap/dist/css/bootstrap.min.css'
 import 'bootstrap/dist/js/bootstrap.bundle.min.js'
+
+// Contrato de Usuario
+import { DtoUserSalida } from './ContratosApis/ContratosUser.js'
 
 // Público
 import Navbar from './components/barraNavegacion.jsx'
@@ -18,19 +21,31 @@ import Contacto from './pages/Contacto'
 import Carrito from './pages/Carrito'
 import ResultadoPago from './pages/ResultadoPago.jsx'
 import DetalleProducto from './pages/DetalleProducto.jsx'
+
 // Admin
 import GestionInventario from './pages/GestionInventario.jsx'
 import NavbarAdmin from './components/NavbarAdmin.jsx'
 import AdminHome from './pages/AdminHome'
 import AdminUser from './pages/AdminUser'    
 import GestionNoticia from './pages/GestionNoticia.jsx'
-import BoletasAdmind  from './pages/BoletasAdmind.jsx'
+import BoletasAdmind from './pages/BoletasAdmind.jsx'
+
+/**
+ * Envuelve cualquier objeto de usuario crudo (de Login o localStorage)
+ * dentro del contrato DtoUserSalida.
+ */
+function normalizarUsuarioContrato(raw) {
+  if (!raw || typeof raw !== 'object') return null
+  // Por si el backend o login lo envuelve en { usuario: {...} } o { data: {...} }
+  const datosReales = raw.usuario || raw.user || raw.data || raw
+  return new DtoUserSalida(datosReales)
+}
 
 function MainLayout({ carrito, agregarAlCarro, eliminarDelCarro, vaciarCarrito, usuario, setUsuario }) {
   const location = useLocation()
   const navigate = useNavigate()
   
-  const isAdmin = usuario?.rol === 'administrador'
+  const isAdmin = (usuario?.rol || '').toLowerCase() === 'administrador'
   const esAdmin = isAdmin || location.pathname.startsWith('/admin')
 
   const estatusGeneral = {
@@ -41,11 +56,20 @@ function MainLayout({ carrito, agregarAlCarro, eliminarDelCarro, vaciarCarrito, 
   }
 
   const handleLogout = () => {
-    // Limpiamos el estado y también el localStorage al cerrar sesión
     setUsuario(null)
     localStorage.removeItem('usuarioLogueado')
     navigate('/')
   }
+
+  const handleLoginExitoso = (datosUsuario) => {
+    const usuarioContrato = normalizarUsuarioContrato(datosUsuario)
+    setUsuario(usuarioContrato)
+    if (usuarioContrato) {
+      localStorage.setItem('usuarioLogueado', JSON.stringify(usuarioContrato))
+    }
+  }
+
+
 
   return (
     <div style={estatusGeneral}>
@@ -58,9 +82,10 @@ function MainLayout({ carrito, agregarAlCarro, eliminarDelCarro, vaciarCarrito, 
           {/* Rutas de Administrador */}
           <Route path="/admin" element={isAdmin ? <AdminHome /> : <Navigate to="/Login" replace />} />
           <Route path="/admin/usuarios" element={isAdmin ? <AdminUser /> : <Navigate to="/Login" replace />} />
-          <Route path="/admin/inventario" element={isAdmin ? <GestionInventario/> : <Navigate to="/Login" replace />} />
-          <Route path="/admin/noticias" element={isAdmin? <GestionNoticia/>:<Navigate to= "/Login" replace/>}/>
-          <Route path="/admin/boletas" element={isAdmin? <BoletasAdmind/>:<Navigate to= "/Login" replace/>}/>
+          <Route path="/admin/inventario" element={isAdmin ? <GestionInventario /> : <Navigate to="/Login" replace />} />
+          <Route path="/admin/noticias" element={isAdmin ? <GestionNoticia usuarioLogueado={usuario} /> : <Navigate to="/Login" replace />} />
+          <Route path="/admin/boletas" element={isAdmin ? <BoletasAdmind /> : <Navigate to="/Login" replace />} />
+
           {/* Rutas generales */}
           <Route path="/producto/:id" element={<DetalleProducto onAgregarAlCarro={agregarAlCarro} />} />
           <Route path="/" element={<Index onAgregarAlCarro={agregarAlCarro} />} />
@@ -69,14 +94,11 @@ function MainLayout({ carrito, agregarAlCarro, eliminarDelCarro, vaciarCarrito, 
           <Route path="/Carrito" element={<Carrito carrito={carrito} onEliminarDelCarro={eliminarDelCarro} usuarioLogueado={usuario} />} />
           <Route path="/resultado-pago" element={<ResultadoPago onVaciarCarrito={vaciarCarrito} usuarioLogueado={usuario} />} />
           <Route path="/Registro" element={<Registro />} />
-          <Route path="/Login" element={<Login onLogin={(datosUsuario) => {
-            setUsuario(datosUsuario)
-            localStorage.setItem('usuarioLogueado', JSON.stringify(datosUsuario))
-          }} />} />
+          <Route path="/Login" element={<Login onLogin={handleLoginExitoso} />} />
           <Route path="/Blog" element={<Blog />} />
           <Route path="/Blog/:id" element={<ArticuloBlog />} />
           <Route path="/Contacto" element={<Contacto />} />
-          <Route path="*" element={<Index />} />
+          <Route path="*" element={<Index onAgregarAlCarro={agregarAlCarro} />} />
         </Routes>
       </main>
 
@@ -90,11 +112,11 @@ function MainLayout({ carrito, agregarAlCarro, eliminarDelCarro, vaciarCarrito, 
 function App() {
   const [carrito, setCarrito] = useState([])
   
-  // Inicializamos el estado del usuario leyendo directamente de localStorage para evitar que se pierda al recargar
   const [usuario, setUsuario] = useState(() => {
     try {
       const guardado = localStorage.getItem('usuarioLogueado')
-      return guardado ? JSON.parse(guardado) : null
+      if (!guardado) return null
+      return normalizarUsuarioContrato(JSON.parse(guardado))
     } catch (e) {
       console.error("Error al leer localStorage:", e)
       return null
@@ -110,7 +132,7 @@ function App() {
         return itemId === idProducto
       })
 
-      const stockDisponible = Number(producto.stock) || 0
+      const stockDisponible = Number(producto.Stok ?? producto.stock) || 0
 
       if (existente) {
         const cantidadActualEnCarro = existente.cantidad

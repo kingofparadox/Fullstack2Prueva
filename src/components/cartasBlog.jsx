@@ -1,26 +1,54 @@
 import { Link } from 'react-router-dom'
 
+function obtenerBloque(item, tipoBuscado) {
+  const bloques = Array.isArray(item?.contenidoJson)
+    ? item.contenidoJson
+    : Array.isArray(item?.contenido)
+      ? item.contenido
+      : []
+
+  const encontrado = bloques.find(
+    (b) => (b?.tipo || '').toLowerCase() === tipoBuscado.toLowerCase()
+  )
+  return encontrado?.contenido || ''
+}
+
 function CartasBlog({ posts }) {
   if (!posts || posts.length === 0) {
-    return <div className="text-center py-4 text-muted">No hay publicaciones disponibles en este momento.</div>
+    return (
+      <div className="text-center py-4 text-muted">
+        No hay publicaciones disponibles en este momento.
+      </div>
+    )
   }
 
   return (
     <div className="row">
       {posts.map((item, idx) => {
-        // Adaptación defensiva para el DTO (tarjeta) de cada noticia
-        const tarjeta = item.tarjeta || item
-        const slug = tarjeta.slug || item.id || idx
-        const imagenUrl = tarjeta.imagenPortada || tarjeta.imagen || 'https://via.placeholder.com/300'
-        const titulo = tarjeta.titulo || 'Sin título'
-        const categoria = tarjeta.categoria || 'Blog'
-        const fecha = item.createdAt ? new Date(item.createdAt).toLocaleDateString('es-CL') : (tarjeta.fecha || '')
-        const resumen = tarjeta.resumen || ''
+        const titulo = item.titulo || 'Sin título'
+        const categoria = item.categoria || 'Blog'
+
+        const imagenUrl =
+          item.portada ||
+          obtenerBloque(item, 'portada') ||
+          'https://via.placeholder.com/300'
+
+        const resumen =
+          item.resumen ||
+          obtenerBloque(item, 'resumen') ||
+          obtenerBloque(item, 'parrafo') ||
+          ''
+
+        const fecha = item.fecha
+          ? new Date(item.fecha).toLocaleDateString('es-CL')
+          : ''
+
+        const rutaArticulo = `/blog/${encodeURIComponent(titulo)}`
 
         return (
           <div
             className="col-12 col-md-6 col-lg-4 mb-4 d-flex justify-content-center"
-            key={item.id || slug || idx}
+            key={`${titulo}-${idx}`}
           >
             <div
               className="card border-secondary shadow-sm w-100"
@@ -44,7 +72,7 @@ function CartasBlog({ posts }) {
 
                 <div className="mt-auto">
                   <Link
-                    to={`/blog/${slug}`}
+                    to={rutaArticulo}
                     className="btn w-100 fw-bold py-2 btn-outline-dark"
                     style={{ borderColor: '#5d4037', color: '#5d4037' }}
                   >
